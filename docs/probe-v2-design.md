@@ -578,6 +578,41 @@ None of this happens before you approve Phase 3, and before you confirm each VM'
 - the collapse plots and ρ estimates (§5.3);
 - the #115/#118 before/after figures from the Phase 1 data.
 
+## 11a. Implementation notes (2026-10-16, branch `feature/probe-v2`)
+
+The first implementation is in `probe/` (see its README). It differs from, or adds to, this design in these places:
+
+**Catalog (§3.1)**
+- The two cimv2 event-log queries are Esinta's own `eventlogconfig` queries: Security 1102 and System 104, newer than now − 2 min, 30/h each, so 60/h in total.
+- That leaves 276/h for `proc_pid` (cimv2 still sums to 420/h).
+- Both event-log queries have truth kind `none` until the `wevtapi` cross-check exists.
+
+**Timing**
+- Every duration comes from QueryPerformanceCounter. Go's monotonic clock on Windows advanced in ~0.5 ms steps on the dev laptop, and can be coarser on other hosts.
+
+**Invariant truth (§6.6)**
+- A changed answer is flagged S2/S5 on every row.
+- After `RebaselineAfter` = 3 identical changed answers, the baseline moves and an `invariant_rebaseline` event is written. Analysis drops the flagged rows that precede a rebaseline: those were a real change, not a silent failure.
+
+**E3 pool-equivalent**
+- Age, count and idle limits are checked when the connection is about to be used. Esinta checks them every 30 s on idle connections. This differs only for connections idle at that moment.
+- The unhealthy test copies Esinta's `shouldMarkUnhealthy(mapWindowsError(OleError.Code()))`. It uses the *outer* HRESULT, so errors wrapped in `DISP_E_EXCEPTION` never match. **Esinta's error-based health marking probably almost never fires**; that is to confirm with data.
+
+**Additional Esinta findings from reading the code (not touched)**
+- The WBEM constant table in `errors.go` is shifted by one from `0x8004100D` on. For example, it defines `WBEM_E_INVALID_NAMESPACE` as `0x8004100D`; the value in `wbemcli.h` is `0x8004100E`.
+- `setSecurity` sets `AuthenticationLevel = 3`, and the code calls it "Packet". For `SWbemSecurity`, 3 is `wbemAuthenticationLevelCall`. The probe copies the value so that it matches production.
+
+**Isolation**
+- `probe2` refuses to start when a known WMI-heavy service or process is running, such as `EsintaEndpoints` or Server Manager, unless `-allow-foreign-wmi` is passed. The override is recorded in `meta.json` `args`.
+
+**Not yet built (increment 2)**
+- ETW foreign-client meter;
+- event 5857 attribution cross-check;
+- `wevtapi` truth;
+- E-fault;
+- X-raw client;
+- analysis scripts.
+
 ## 12. Decisions needed from you
 
 1. **Clones:** how many clean Server 2016 clones can you provide (plan A: 2, plan B: 4)? Their vCPU and RAM (4 vCPU / 8 GB suggested)? Can each revert to a prepared snapshot between arms? Any Server 2022 / Win10 / Win11 clones for F?
