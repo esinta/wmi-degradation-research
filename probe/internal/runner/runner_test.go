@@ -47,7 +47,12 @@ func (c *fakeConn) RunningSince() time.Time {
 }
 func (c *fakeConn) Close() {
 	if c.closed.CompareAndSwap(false, true) && c.onRel != nil {
-		c.onRel(0, 0)
+		// Like wmi.Conn: the release runs on the connection's own thread
+		// and reports after Close has returned.
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			c.onRel(0, 0)
+		}()
 	}
 }
 

@@ -256,6 +256,12 @@ type Runner struct {
 	errOnce  sync.Once
 	writeErr error
 
+	// Connection releases run on each connection's own thread and report
+	// after Close returns; shutdown waits for them before closing the files.
+	relWG     sync.WaitGroup
+	relMu     sync.RWMutex
+	relClosed bool
+
 	// CPU means over the arm, from the sampler goroutine only.
 	cpuHost, cpuInduced float64
 	cpuN                int
@@ -369,6 +375,9 @@ func Run(ctx context.Context, cfg Config, env Env) (Summary, error) {
 			r.retire(s, "shutdown")
 		}
 	}
+	if !waitTimeout(&r.relWG, releaseWait) {
+		r.event("release_wait_timeout", "", "", 0, releaseWait.String())
+	}
 	r.event("arm_end", "", "", 0, endReason)
 
 	if cfg.ReleaseTest > 0 {
@@ -388,6 +397,9 @@ func Run(ctx context.Context, cfg Config, env Env) (Summary, error) {
 
 	end := time.Now().UTC()
 	r.meta.EndUTC, r.meta.EndReason = &end, endReason
+	r.relMu.Lock()
+	r.relClosed = true
+	r.relMu.Unlock()
 	r.meta.Totals = r.totals()
 	merr := r.writeMeta()
 	werr := ws.Close()
@@ -398,12 +410,18 @@ func Run(ctx context.Context, cfg Config, env Env) (Summary, error) {
 	return sum, errors.Join(r.writeErr, merr, werr)
 }
 
-func waitTimeout(wg *sync.WaitGroup, d time.Duration) {
+// releaseWait bounds the shutdown wait for connection releases (a release
+// waits for the connection's abandoned calls).
+const releaseWait = time.Minute
+
+func waitTimeout(wg *sync.WaitGroup, d time.Duration) bool {
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()
 	select {
 	case <-done:
+		return true
 	case <-time.After(d):
+		return false
 	}
 }
 
@@ -579,10 +597,20 @@ func (r *Runner) dial(s *slot) {
 	}
 	gen := s.gen + 1
 	var id string
+	var once sync.Once
+	r.relWG.Add(1)
+	released := func() { once.Do(r.relWG.Done) }
 	c, ci, err := r.env.Dial(opts, func(outstanding, double int) {
+		defer released()
+		r.relMu.RLock()
+		defer r.relMu.RUnlock()
+		if r.relClosed {
+			return // after the files closed (release_wait_timeout was logged)
+		}
 		r.connRow(id, "", s, gen, "release_done", "", wmi.ConnectInfo{}, 0, 0, 0, outstanding, double)
 	})
 	if err != nil || c == nil {
+		released()
 		r.connectFails.Add(1)
 		s.failStreak++
 		back := time.Duration(min(1<<min(s.failStreak-1, 5), 30)) * time.Second
