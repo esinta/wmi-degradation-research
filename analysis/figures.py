@@ -13,7 +13,8 @@ Writes PNGs and a per-run summary CSV:
 Correct and buggy arms are never pooled: buggy runs are drawn and labelled
 separately (client_class in meta.json). Keys that failed pre-flight's
 catalog check (deterministic errors) are excluded from the error rate and
-counted on their own (pass --preflight).
+counted on their own, and S2 is counted only above the key's truth
+baseline from pre-flight's k=1 ramp step (pass --preflight).
 """
 
 import argparse
@@ -27,7 +28,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from load import load_run
+from load import load_run, net_silent, shutdown_cut, truth_baseline
 
 WINDOW = "15min"
 MB = 1024 * 1024
@@ -79,22 +80,27 @@ def wmiprvse(run, path):
     plt.close(fig)
 
 
-def rates(run, deterministic):
+def rates(run, deterministic, baseline):
     q = run.queries
     if q.empty:
         return {}
+    cut = shutdown_cut(q)
+    q = q[~cut]
     det = q["query_key"].isin(deterministic)
     rest = q[~det]
     n = len(rest)
-    sil = rest["silent_mask"].fillna(0).astype(int)
+    sil = net_silent(rest, baseline)
+    raw_s2 = int(((rest["silent_mask"].fillna(0).astype(int).to_numpy() >> 1) & 1).sum())
     per = lambda c: 1e5 * c / n if n else np.nan
     return {
         "queries": len(q),
+        "shutdown_cut": int(cut.sum()),
         "deterministic_error_queries": int(det.sum()),
+        "s2_at_truth_baseline": raw_s2 - int(((sil.to_numpy() >> 1) & 1).sum()),
         "error_per_100k": per(int((rest["status"] != "ok").sum())),
         "abandoned_per_100k": per(int((rest["status"] == "abandoned").sum())),
         "silent_per_100k": per(int((sil > 0).sum())),
-        **{f"s{i + 1}_per_100k": per(int(((sil >> i) & 1).sum())) for i in range(5)},
+        **{f"s{i + 1}_per_100k": per(int(((sil.to_numpy() >> i) & 1).sum())) for i in range(5)},
     }
 
 
@@ -105,8 +111,10 @@ def main():
     ap.add_argument("--preflight", help="preflight.json (catalog check -> deterministic error keys)")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
-    deterministic = set()
+    deterministic, baseline = set(), {}
     if a.preflight:
+        baseline = truth_baseline(a.preflight)
+        print("truth baseline (key: missing on every k=1 query):", baseline)
         pf = json.load(open(a.preflight, encoding="utf-8"))
         deterministic = {c["key"] for c in pf.get("catalog_check") or [] if c.get("status") != "ok"}
 
@@ -120,7 +128,7 @@ def main():
         wmiprvse(run, os.path.join(a.out, f"wmiprvse_{tag}.png"))
         rows.append({"run": d, "arm": arm, "client_class": run.meta.get("client_class"), "strategy": run.meta.get("strategy"),
                      "k": run.meta.get("k"), "end_reason": run.meta.get("end_reason"), "commit": run.meta.get("probe_commit"),
-                     **rates(run, deterministic)})
+                     **rates(run, deterministic, baseline)})
     s = pd.DataFrame(rows)
     s.to_csv(os.path.join(a.out, "summary.csv"), index=False)
 

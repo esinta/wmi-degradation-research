@@ -645,6 +645,12 @@ Inferred, not proven:
 
 These are product findings for the user to decide on; the product repo was not touched. In the probe, the same three queries come from the catalog verbatim, so each arm shows a constant per-key error rate. Pre-flight's catalog check classifies them, and analysis reports them apart from P4.
 
+**Pre-flight findings on win2 (2026-10-17, Server 2019 17763)**
+- **Provider-side silent truncation in `Win32_SystemDriver`.** With any configuration property selected (`DisplayName`, `PathName`, `StartMode`, `StartName`, `ServiceType`, `Description`, or `SELECT *`), CIMWin32 returns 333 drivers and omits `vwifibus`. Its service entry exists (SCM config query succeeds) but `vwifibus.sys` is absent. `SELECT Name` and `SELECT Name, State` return 334. Reproduced on demand (22:48Z). No error is returned, so this is a WMI-side "truncated but successful" result, not a client bug and not degradation. Esinta's driver collector uses the full property list, so it would miss such drivers too (inferred from the same query; not checked on other hosts). Analysis handles it as a truth baseline: S2 counts only above the per-key missing count seen on every query of pre-flight's k=1 step (`analysis/load.py: truth_baseline`).
+- **Provider DLLs reload inside a living host at production rates.** `__CacheControl` ClearAfter is 30 s. In the k=1 ramp step, 5857 provider-load events recur every 1–2 min in the same WmiPrvSE PID. Segments for L vs H comparisons (§5.4) must therefore break at provider loads (5857), not only at host PID changes.
+- **k_H = 100 is the ramp ceiling, not the CPU limit** (29.9 % induced CPU at k=100 vs the 40 % budget; 0 dropped at every step).
+- **Calls running at arm end** were written as `abandoned` with their real sub-deadline latency (1 of 5,300 at k=50). Analysis excludes them (`shutdown_cut`); the probe should give them their own status in the next build.
+
 **Not yet built (increment 2)**
 - ETW foreign-client meter;
 - event 5857 attribution cross-check;

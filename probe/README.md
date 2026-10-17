@@ -54,7 +54,7 @@ python tools/lab_ssh.py <t> run "type C:\probe\logs\preflight-*.log"
 
 `tools/probe_task.py` creates the task from XML: LocalSystem, priority 4 (normal) and **no execution time limit**. Do not use `schtasks /Create /TR` for arms. Such tasks run below normal and are killed after the 72 h default limit, which would cut H, M and L. `probe2` also raises itself to normal priority and records `priority_class` in `meta.json`.
 
-Each arm is `python tools/probe_task.py <t> <arm> -- <args>`. `PF` below is the `preflight.json` path, and `KH` is `k_h` from it.
+Each arm is `python tools/probe_task.py <t> <arm> -- <args>`. `PF` below is the `preflight.json` path, and `KH` is `k_h` from it. Write `PF` with forward slashes (`C:/probe/results/...`): backslashes are lost on the way through the shell and SSH.
 
 | Arm | probe2 args |
 |---|---|

@@ -64,3 +64,50 @@ def event_time(run: Run, kind: str):
         return None
     hit = ev[ev["kind"] == kind]
     return hit["ts"].iloc[0] if len(hit) else None
+
+
+S2 = 2  # silent class S2 (truncated) bit in silent_mask
+
+
+def truth_baseline(preflight_json: str) -> dict:
+    """Per-key truth mismatch that is present on every query (design §6.6:
+    truth has a measured baseline), from pre-flight's k=1 ramp step.
+
+    A key gets a baseline only if every ok query in that step had
+    truth_missing > 0; the baseline is the minimum. Example: on win2,
+    Win32_SystemDriver drops `vwifibus` (binary absent) whenever a
+    config property is selected, so `drv` misses 1 driver on every query.
+    """
+    d = os.path.dirname(os.path.abspath(preflight_json))
+    base = {}
+    for rd in glob.glob(os.path.join(d, "ramp", "*", "ramp-k1", "*")):
+        q = read_base(rd, "queries")
+        if q.empty:
+            continue
+        ok = q[q["status"] == "ok"]
+        for key, g in ok.groupby("query_key"):
+            m = pd.to_numeric(g["truth_missing"], errors="coerce").fillna(0)
+            if len(m) and (m > 0).all():
+                base[key] = int(m.min())
+    return base
+
+
+def net_silent(q: pd.DataFrame, baseline: dict) -> pd.Series:
+    """silent_mask with S2 cleared where a key's truth_missing does not
+    exceed its pre-flight baseline."""
+    sil = q["silent_mask"].fillna(0).astype(int).to_numpy().copy()
+    if baseline:
+        b = q["query_key"].map(baseline).fillna(-1).to_numpy()
+        miss = pd.to_numeric(q["truth_missing"], errors="coerce").fillna(0).to_numpy()
+        at_base = (b >= 0) & (miss <= b)
+        sil[at_base] &= ~S2
+    return pd.Series(sil, index=q.index)
+
+
+def shutdown_cut(q: pd.DataFrame) -> pd.Series:
+    """Calls that were running when the arm ended. Builds up to 379cdbca207a
+    write them as status=abandoned with their real (sub-deadline) latency;
+    they are not deadline abandonments."""
+    lat = pd.to_numeric(q["latency_ms"], errors="coerce")
+    dl = pd.to_numeric(q["deadline_ms"], errors="coerce")
+    return (q["status"] == "abandoned") & (lat >= 0) & (lat < dl)
