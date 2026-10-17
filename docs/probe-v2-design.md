@@ -616,6 +616,35 @@ The first implementation is in `probe/` (see its README). It differs from, or ad
 - Esinta uses these flags (`connection.go:518`) and `oleutil.ForEach` for both objects and properties (`connection.go:542`, `:589`). An enumeration-time error in Esinta is therefore reported as an empty result, not an error.
 - Scope: this is shown only for an invalid class (one query, one host). Whether access-denied, provider-failure or quota errors also surface at `Next` is untested; E-fault would test it.
 
+**Three production queries fail on every poll, and Esinta logs them as success (win2, 2026-10-17)**
+
+What failed, seen in WMI-Activity/Operational event 5858 on win2: in the 7 h before the agent was stopped (12:00–19:00Z), the Esinta agent (PID 952) got 84 server-side errors on each of these three queries, i.e. on every poll.
+
+| Query | Source | Error | Probable reason (schema reasoning, not verified) |
+|---|---|---|---|
+| `SELECT Name FROM __EventConsumer` (`root\subscription`) | `collector/wmisubscriptions/collector.go:57` | `WBEM_E_INVALID_QUERY` (0x80041017) | `Name` is the key of the concrete consumer classes, not of the abstract base |
+| `SELECT InstanceID, Program, Package FROM MSFT_NetApplicationFilter` | `collector/firewallrules/collector.go:53` | 0x80041017 | The WMI property is `AppPath`; `Program` is the cmdlet's name for it |
+| `SELECT TaskName, TaskPath, LastRunTime, NextRunTime, LastTaskResult FROM MSFT_ScheduledTaskInfo` | `collector/scheduledtasks/collector.go:338` | `WBEM_E_INVALID_CLASS` (0x80041010) | No such class; `Get-ScheduledTaskInfo` returns `MSFT_TaskDynamicInfo` through a method |
+
+Verified by reading the code (read-only):
+- Esinta's `ExecQuery` sets `ReturnImmediately|ForwardOnly` (`connection.go:518`), iterates with `oleutil.ForEach` (`:542`) and returns `results, nil` (`:648`).
+- go-ole `oleutil.go:118-126` drops the `Next` error. A failure at `Next` therefore returns 0 rows and no error.
+- The `"empty result set"` error at `:531` fires only when `ExecQuery` returns no object set at all, never for 0 rows.
+- The executor logs `result:"success"` whenever the error is nil (`executor.go:505-524`). Audit lines carry no query text and no row count.
+
+Verified in the preserved logs (`wmi-evidence-2026-10-16`, 2026-10-12 to 10-16, before the 5858 window above):
+- Every query in these three namespaces was logged `success` on the OT host (452 cycles), the Win10 VM and the laptop.
+- There are no error lines from these collectors. ConnectServer failures from the same build are logged.
+
+Inferred, not proven:
+- The logged successes are these failing queries. The attribution is by fixed position within each collector cycle. Their median `duration_ms` is 0 at exactly the app-filter and task-info positions (OT 0 ms vs 115–252 ms for their neighbours), on all three hosts.
+- What each collector does with the silent 0 rows:
+  - Firewall rules ship with empty Program/Package, and the cycle succeeds. This defeats the code's own "a filter-query failure fails the cycle" safeguard.
+  - Consumers other than CommandLine/ActiveScript are missing from the subscription snapshot.
+  - Scheduled tasks lose last-run, next-run and last-result.
+
+These are product findings for the user to decide on; the product repo was not touched. In the probe, the same three queries come from the catalog verbatim, so each arm shows a constant per-key error rate. Pre-flight's catalog check classifies them, and analysis reports them apart from P4.
+
 **Not yet built (increment 2)**
 - ETW foreign-client meter;
 - event 5857 attribution cross-check;
