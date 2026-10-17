@@ -26,10 +26,14 @@ import (
 	"wmiresearch/probe/internal/preflight"
 	"wmiresearch/probe/internal/runner"
 	"wmiresearch/probe/internal/strategy"
+	"wmiresearch/probe/internal/sysinfo"
 )
 
 // commit is set at build time: -ldflags "-X main.commit=<sha>".
 var commit = "dev"
+
+// priority is the process priority class as started, and its change.
+var priority string
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.LUTC)
@@ -39,6 +43,11 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	var err error
+	if os.Args[1] == "run" || os.Args[1] == "preflight" {
+		if priority, err = sysinfo.NormalPriority(); err != nil {
+			log.Printf("priority %s: %v", priority, err)
+		}
+	}
 	switch os.Args[1] {
 	case "run":
 		err = cmdRun(ctx, os.Args[2:])
@@ -152,7 +161,7 @@ func cmdRun(ctx context.Context, args []string) error {
 		Arm: *arm, Host: *host, OutRoot: *outRoot, RunID: runID(), ClientClass: *class, Bug: *bug,
 		Mix: *mix, Queries: qs, K: *k, Duration: *dur, Seed: *seed, Strategy: st, Deadline: *deadline, Cimv2Conns: *cimv2,
 		SampleInterval: *sample, HangWarn: *hangWarn, HangAbort: *hangAbort, ReleaseTest: *release, Truth: *truthOn,
-		Attribution: attribution, Limits: lim, Commit: commit, Args: argv,
+		Attribution: attribution, Limits: lim, Commit: commit, Priority: priority, Args: argv,
 	}
 	if err := cfg.Validate(); err != nil {
 		return err
@@ -196,7 +205,7 @@ func cmdPreflight(ctx context.Context, args []string) error {
 	}
 	res, dir, err := preflight.Run(ctx, preflight.Config{
 		OutRoot: *outRoot, Host: *host, RunID: runID(), Idle: *idle, UnloadWatch: *unload,
-		Ramp: ks, RampStep: *step, RampBudget: *budget, Commit: commit, Log: log.Printf,
+		Ramp: ks, RampStep: *step, RampBudget: *budget, Commit: commit, Priority: priority, Log: log.Printf,
 	})
 	if res != nil {
 		log.Printf("preflight written to %s", dir)

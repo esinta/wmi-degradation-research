@@ -605,6 +605,17 @@ The first implementation is in `probe/` (see its README). It differs from, or ad
 **Isolation**
 - `probe2` refuses to start when a known WMI-heavy service or process is running, such as `EsintaEndpoints` or Server Manager, unless `-allow-foreign-wmi` is passed. The override is recorded in `meta.json` `args`.
 
+**Task Scheduler defaults (found on win2, 2026-10-17)**
+- A task made with `schtasks /Create /TR` runs at task priority 7, and the probe process was **BelowNormal**. Such a task also has the default 72 h `ExecutionTimeLimit`, which would kill H at its end and M and L partway through.
+- `tools/probe_task.py` now creates tasks from XML (priority 4, `ExecutionTimeLimit PT0S`, no battery conditions). `probe2` also raises itself to NORMAL and records `priority_class` (as started, and whether it was raised) in `meta.json` and `preflight.json`.
+- The first pre-flight (`20261017T191458Z`) ran BelowNormal from the old binary. Only its k calibration ramp is affected, and only under CPU contention.
+
+**H-enum confirmed on Server 2019 (win2, 2026-10-17 19:14Z, `wmi-integration.test.exe`, one query)**
+- `SELECT * FROM Win32_NoSuchClass_Probe2` with `ReturnImmediately|ForwardOnly`: `ExecQuery` **succeeded**. The error surfaced at the first `Objects.Next` as `WBEM_E_INVALID_CLASS` (0x80041010) after 0 items.
+- The same query through go-ole `oleutil.ForEach` returned **no error and 0 items**: an empty success.
+- Esinta uses these flags (`connection.go:518`) and `oleutil.ForEach` for both objects and properties (`connection.go:542`, `:589`). An enumeration-time error in Esinta is therefore reported as an empty result, not an error.
+- Scope: this is shown only for an invalid class (one query, one host). Whether access-denied, provider-failure or quota errors also surface at `Next` is untested; E-fault would test it.
+
 **Not yet built (increment 2)**
 - ETW foreign-client meter;
 - event 5857 attribution cross-check;

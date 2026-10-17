@@ -58,8 +58,9 @@ type Config struct {
 	Attribution    map[string]string // class -> provider DLL (from pre-flight)
 	Limits         abort.Limits
 
-	Commit string
-	Args   []string
+	Commit   string
+	Priority string // process priority class as started (and "->normal" if raised)
+	Args     []string
 }
 
 // Conn is what the runner needs from a connection (wmi.Conn; fakes in tests).
@@ -107,6 +108,7 @@ type Meta struct {
 	ClientClass   string            `json:"client_class"`
 	Bug           string            `json:"bug,omitempty"`
 	ProbeCommit   string            `json:"probe_commit"`
+	Priority      string            `json:"priority_class"`
 	GoVersion     string            `json:"go_version"`
 	Args          []string          `json:"args"`
 	Mix           string            `json:"mix"`
@@ -290,7 +292,7 @@ func Run(ctx context.Context, cfg Config, env Env) (Summary, error) {
 
 	r.meta = Meta{
 		SchemaVersion: out.SchemaVersion, RunID: cfg.RunID, Arm: cfg.Arm, Host: cfg.Host, ClientClass: cfg.ClientClass, Bug: cfg.Bug,
-		ProbeCommit: cfg.Commit, GoVersion: runtime.Version(), Args: cfg.Args, Mix: cfg.Mix, K: cfg.K,
+		ProbeCommit: cfg.Commit, Priority: cfg.Priority, GoVersion: runtime.Version(), Args: cfg.Args, Mix: cfg.Mix, K: cfg.K,
 		PerHourAtK: cfg.K * catalog.PerHourTotal(cfg.Queries), CatalogHash: catalog.Hash(cfg.Queries), Catalog: cfg.Queries,
 		Strategy: string(cfg.Strategy.Kind), Abandons: cfg.Strategy.Abandons(), DeadlineMS: cfg.Deadline.Milliseconds(),
 		Cimv2Conns: cfg.Cimv2Conns, Seed: cfg.Seed, Duration: cfg.Duration.String(), Truth: cfg.Truth,

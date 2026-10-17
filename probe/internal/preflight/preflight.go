@@ -40,6 +40,7 @@ type Config struct {
 	RampStep    time.Duration
 	RampBudget  float64 // max mean induced CPU % for k_H
 	Commit      string
+	Priority    string
 	Log         func(format string, args ...any)
 }
 
@@ -97,6 +98,7 @@ type RampStep struct {
 type Result struct {
 	RunID        string               `json:"run_id"`
 	ProbeCommit  string               `json:"probe_commit"`
+	Priority     string               `json:"priority_class"`
 	StartUTC     time.Time            `json:"start_utc"`
 	EndUTC       time.Time            `json:"end_utc"`
 	OS           sysinfo.OSInfo       `json:"os"`
@@ -132,7 +134,7 @@ func Run(ctx context.Context, cfg Config) (*Result, string, error) {
 	}
 	defer ws.Close()
 
-	res := &Result{RunID: cfg.RunID, ProbeCommit: cfg.Commit, StartUTC: time.Now().UTC(), OS: sysinfo.GetOSInfo(runtime.NumCPU()),
+	res := &Result{RunID: cfg.RunID, ProbeCommit: cfg.Commit, Priority: cfg.Priority, StartUTC: time.Now().UTC(), OS: sysinfo.GetOSInfo(runtime.NumCPU()),
 		Namespaces: map[string]Namespace{}, Providers: map[string]Provider{}, Attribution: map[string]string{}}
 	res.Account, _ = sysinfo.Account(uint32(os.Getpid()))
 	res.Isolation, _ = isolation.Check()
@@ -280,7 +282,7 @@ func Run(ctx context.Context, cfg Config) (*Result, string, error) {
 				Queries: catalog.Without(catalog.Production(), skip), K: k, Duration: cfg.RampStep, Seed: 1,
 				Strategy: st, Deadline: 30 * time.Second, Cimv2Conns: 3, SampleInterval: 10 * time.Second,
 				HangWarn: 10 * time.Minute, HangAbort: 30 * time.Minute, Truth: true, Attribution: res.Attribution,
-				Limits: abort.Defaults(), Commit: cfg.Commit,
+				Limits: abort.Defaults(), Commit: cfg.Commit, Priority: cfg.Priority,
 			}
 			sum, err := runner.Run(ctx, rc, runner.NativeEnv(rc.OutRoot, res.Attribution))
 			step := RampStep{K: k, EndReason: sum.EndReason, MeanInducedCPU: sum.MeanInducedCPU, MeanHostCPU: sum.MeanHostCPU,

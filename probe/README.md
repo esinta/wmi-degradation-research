@@ -48,14 +48,15 @@ python tools/lab_ssh.py <t> put probe/dist/wmi-integration.test.exe C:/probe/wmi
 python tools/lab_ssh.py <t> run "C:\probe\wmi-integration.test.exe -test.v"
 
 # 3. Pre-flight (≈ 60 min idle + 30 min unload watch + 6 × 10 min ramp)
-python tools/lab_ssh.py <t> run "schtasks /Create /F /TN probe2 /RU SYSTEM /SC ONCE /ST 00:00 /TR \"cmd /c C:\probe\probe2.exe preflight -ramp 1,5,10,20,50,100 > C:\probe\preflight.log 2>&1\""
-python tools/lab_ssh.py <t> run "schtasks /Run /TN probe2"
-python tools/lab_ssh.py <t> run "type C:\probe\preflight.log"
+python tools/probe_task.py <t> preflight -- preflight -ramp 1,5,10,20,50,100
+python tools/lab_ssh.py <t> run "type C:\probe\logs\preflight-*.log"
 ```
 
-Each arm uses the same task with a different `/TR`. `PF` below is the `preflight.json` path, and `KH` is `k_h` from it.
+`tools/probe_task.py` creates the task from XML: LocalSystem, priority 4 (normal) and **no execution time limit**. Do not use `schtasks /Create /TR` for arms. Such tasks run below normal and are killed after the 72 h default limit, which would cut H, M and L. `probe2` also raises itself to normal priority and records `priority_class` in `meta.json`.
 
-| Arm | Command (after `C:\probe\probe2.exe`) |
+Each arm is `python tools/probe_task.py <t> <arm> -- <args>`. `PF` below is the `preflight.json` path, and `KH` is `k_h` from it.
+
+| Arm | probe2 args |
 |---|---|
 | ST-1 + ST-3 | `run -arm ST-1 -k KH -duration 6h -release-test 1h -preflight PF` |
 | ST-2 | `run -arm buggy-ST-2 -client-class buggy -bug array-leak -k KH/10 -duration 1h -preflight PF` |
@@ -68,6 +69,8 @@ Each arm uses the same task with a different `/TR`. `PF` below is the `preflight
 | E3 | `run -arm E3 -strategy pool -k KH -duration 72h -preflight PF` |
 | B1 | `run -arm buggy-B1-hi -client-class buggy -bug array-leak -k KH/10 -duration 4h -preflight PF`, then `-arm buggy-B1-lo -k KH/40` |
 | B2 | `run -arm buggy-B2-c1 -client-class buggy -bug cross-apartment -cimv2-conns 1 -k KH -duration 4h -preflight PF`, then `-arm buggy-B2-c5 -cimv2-conns 5` |
+
+**Inspecting a probe host:** use only non-WMI tools (tasklist, sc, schtasks, reg, wevtutil, `Get-Process`, `Get-Service`). `Get-CimInstance`, `Get-WmiObject`, `Get-NetIPAddress`, `Get-ScheduledTask`, `Get-Mp*` and `Get-NetFirewall*` all go through WMI and start provider hosts.
 
 Write the arithmetic out (e.g. `-k 5` for KH/10 when KH = 50).
 
