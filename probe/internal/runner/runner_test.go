@@ -329,3 +329,25 @@ func TestRunDirIsNeverReused(t *testing.T) {
 		t.Fatal("second run into the same directory accepted")
 	}
 }
+
+// A call still running when the arm ends is "shutdown", not "abandoned":
+// it never reached its deadline.
+func TestCallsCutByArmEndAreShutdown(t *testing.T) {
+	cfg := baseConfig(t, "cut")
+	cfg.Deadline = 10 * time.Second
+	cfg.Queries = catalog.Only(catalog.Production(), []string{"svc"})
+	cfg.K = 2000 // one query every 0.06 s, each running 0.3 s: always some in flight
+	cfg.Duration = 700 * time.Millisecond
+	var conns []*fakeConn
+	var mu sync.Mutex
+	if _, err := Run(context.Background(), cfg, env(300*time.Millisecond, &conns, &mu)); err != nil {
+		t.Fatal(err)
+	}
+	st := map[string]int{}
+	for _, r := range readAll(t, cfg.Dir(), "queries") {
+		st[r[col("status")]]++
+	}
+	if st["shutdown"] == 0 || st["abandoned"] != 0 {
+		t.Fatalf("statuses %v: want shutdown rows and no abandoned", st)
+	}
+}

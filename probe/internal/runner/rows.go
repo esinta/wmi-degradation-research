@@ -110,6 +110,13 @@ func (r *Runner) writeQuery(base []string, res wmi.Result, o truth.Outcome, pid 
 	r.noteWriteErr(r.ws.W("queries").Write(row))
 }
 
+func (lr lateRow) status() wmi.Status {
+	if lr.shutdown {
+		return wmi.StatusShutdown
+	}
+	return wmi.StatusAbandoned
+}
+
 // writeLate writes the row of an abandoned call once WMI answered.
 func (r *Runner) writeLate(seq uint64, res wmi.Result) {
 	r.lateMu.Lock()
@@ -122,7 +129,7 @@ func (r *Runner) writeLate(seq uint64, res wmi.Result) {
 	if !ok || closed {
 		return
 	}
-	res.Status = wmi.StatusAbandoned
+	res.Status = lr.status()
 	r.writeQuery(append([]string(nil), lr.base...), res, truth.Outcome{Kind: "late", Lo: -1, Hi: -1}, lr.pid, false)
 }
 
@@ -141,7 +148,7 @@ func (r *Runner) flushLate() {
 	sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
 	for _, s := range seqs {
 		lr := pend[s]
-		res := wmi.Result{Status: wmi.StatusAbandoned, Latency: -time.Millisecond}
+		res := wmi.Result{Status: lr.status(), Latency: -time.Millisecond}
 		r.writeQuery(append([]string(nil), lr.base...), res, truth.Outcome{Kind: "still_running", Lo: -1, Hi: -1}, lr.pid, false)
 	}
 }

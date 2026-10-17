@@ -105,9 +105,9 @@ def net_silent(q: pd.DataFrame, baseline: dict) -> pd.Series:
 
 
 def shutdown_cut(q: pd.DataFrame) -> pd.Series:
-    """Calls that were running when the arm ended. Builds up to 379cdbca207a
-    write them as status=abandoned with their real (sub-deadline) latency;
-    they are not deadline abandonments."""
+    """Calls that were running when the arm ended: status=shutdown in builds
+    after 379cdbca207a; that build and earlier wrote them as status=abandoned
+    with their real (sub-deadline) latency. Not deadline abandonments."""
     lat = pd.to_numeric(q["latency_ms"], errors="coerce")
     dl = pd.to_numeric(q["deadline_ms"], errors="coerce")
-    return (q["status"] == "abandoned") & (lat >= 0) & (lat < dl)
+    return (q["status"] == "shutdown") | ((q["status"] == "abandoned") & (lat >= 0) & (lat < dl))

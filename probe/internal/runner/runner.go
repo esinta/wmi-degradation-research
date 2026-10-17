@@ -268,8 +268,9 @@ type Runner struct {
 }
 
 type lateRow struct {
-	base []string
-	pid  uint32
+	base     []string
+	pid      uint32
+	shutdown bool // cut by arm end, not abandoned at its deadline
 }
 
 // Summary is what Run reports.
@@ -542,7 +543,7 @@ func (r *Runner) execute(ctx context.Context, s *slot, j job) {
 		// late path if it returns before the probe exits.
 		r.lateMu.Lock()
 		if !r.lateClosed {
-			r.latePending[seq] = lateRow{base: base, pid: pid}
+			r.latePending[seq] = lateRow{base: base, pid: pid, shutdown: true}
 		}
 		r.lateMu.Unlock()
 		return
