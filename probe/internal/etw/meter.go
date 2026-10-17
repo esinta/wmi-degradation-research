@@ -21,7 +21,9 @@ type Count struct {
 	Self      bool
 	Internal  bool // WmiPrvSE calling back into Winmgmt: WMI's own work, not a client
 	Ops       uint64
-	Sample    string // first operation text seen for this client in the interval
+	User      string // client account, from the first operation seen
+	Sample    string // first operation other than Connect (Connect if that is all there was)
+	SampleNS  string // namespace of Sample
 }
 
 // Drained is what the meter saw since the previous drain.
@@ -81,26 +83,32 @@ func (m *Meter) record(rec *eventRecord) {
 		m.counts[k] = c
 	}
 	c.Ops++
-	first := c.Sample == "" && !c.Self
+	sample := !c.Self && (c.Sample == "" || c.Sample == opConnect)
 	resolve := c.Image == "" && !c.Self
 	m.mu.Unlock()
 	if resolve {
 		// Resolve now: short-lived clients (tasklist) are gone by the drain.
 		img := imageOf(pid, local != 0)
+		user := propString(rec, "User")
 		m.mu.Lock()
-		c.Image = img
+		c.Image, c.User = img, user
 		c.Internal = strings.EqualFold(filepath.Base(img), "WmiPrvSE.exe")
 		m.mu.Unlock()
 	}
-	if first {
+	if sample {
+		// Keep the first operation that says what the client wanted; most
+		// clients open with an uninformative Connect.
 		op := propString(rec, "Operation")
+		ns := propString(rec, "NamespaceName")
 		m.mu.Lock()
-		if c.Sample == "" {
-			c.Sample = op
+		if c.Sample == "" || (c.Sample == opConnect && op != opConnect) {
+			c.Sample, c.SampleNS = op, ns
 		}
 		m.mu.Unlock()
 	}
 }
+
+const opConnect = "IWbemServices::Connect"
 
 func (m *Meter) setOn(on bool) {
 	err := m.sess.Enable(on)

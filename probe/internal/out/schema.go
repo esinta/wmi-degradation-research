@@ -4,7 +4,7 @@ package out
 // add columns at the end and bump SchemaVersion.
 
 // SchemaVersion is recorded in meta.json.
-const SchemaVersion = 2
+const SchemaVersion = 3
 
 var QueryCols = []string{
 	"run_id", "arm", "query_seq", "ts_start", "due_lag_ms",
@@ -44,10 +44,10 @@ var HostCols = []string{
 	"etw_on", "wmi_ops_self_total", "wmi_ops_foreign_total", "etw_lost", "wmi_ops_internal_total",
 }
 
-// WmiOpsCols (v2): WMI operation starts per client process per sample
+// WmiOpsCols (v2; client_user and sample_ns v3): WMI operation starts per client process per sample
 // interval, from the ETW meter. on_s is how long the meter was on in the
 // interval; rows are written only for clients with ops > 0.
-var WmiOpsCols = []string{"ts", "on_s", "client_pid", "client_image", "is_local", "is_self", "is_internal", "ops", "sample_op"}
+var WmiOpsCols = []string{"ts", "on_s", "client_pid", "client_image", "is_local", "is_self", "is_internal", "ops", "sample_op", "client_user", "sample_ns"}
 
 var EventCols = []string{"ts", "kind", "slot", "conn_id", "pid", "detail"}
 

@@ -362,7 +362,7 @@ func WmiOpsRows(at time.Time, d etw.Drained) [][]string {
 			continue
 		}
 		rows = append(rows, []string{ts(at), strconv.FormatFloat(d.OnFor.Seconds(), 'f', 1, 64), itoa(c.ClientPID), c.Image,
-			strconv.FormatBool(c.Local), strconv.FormatBool(c.Self), strconv.FormatBool(c.Internal), itoa(c.Ops), c.Sample})
+			strconv.FormatBool(c.Local), strconv.FormatBool(c.Self), strconv.FormatBool(c.Internal), itoa(c.Ops), c.Sample, c.User, c.SampleNS})
 	}
 	return rows
 }

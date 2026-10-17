@@ -145,11 +145,13 @@ type CatalogCheck struct {
 
 // ForeignClient is one non-probe WMI client seen by the meter.
 type ForeignClient struct {
-	PID    uint32 `json:"pid"`
-	Image  string `json:"image"`
-	Local  bool   `json:"local"`
-	Ops    uint64 `json:"ops"`
-	Sample string `json:"sample_op"`
+	PID      uint32 `json:"pid"`
+	Image    string `json:"image"`
+	Local    bool   `json:"local"`
+	User     string `json:"user"`
+	Ops      uint64 `json:"ops"`
+	Sample   string `json:"sample_op"`
+	SampleNS string `json:"sample_ns"`
 }
 
 // Run executes the pre-flight and writes preflight.json in its directory.
@@ -211,8 +213,11 @@ func Run(ctx context.Context, cfg Config) (*Result, string, error) {
 			}
 			f := foreign[c.ClientPID]
 			if f == nil {
-				f = &ForeignClient{PID: c.ClientPID, Image: c.Image, Local: c.Local, Sample: c.Sample}
+				f = &ForeignClient{PID: c.ClientPID, Image: c.Image, Local: c.Local, User: c.User}
 				foreign[c.ClientPID] = f
+			}
+			if f.Sample == "" || (f.Sample == "IWbemServices::Connect" && c.Sample != "") {
+				f.Sample, f.SampleNS = c.Sample, c.SampleNS
 			}
 			f.Ops += c.Ops
 		}
