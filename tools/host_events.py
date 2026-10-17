@@ -36,6 +36,10 @@ def fetch(target: str, log: str, cond: str, start: str, end: str) -> str:
     env = dict(os.environ, PYTHONIOENCODING="utf-8", MSYS_NO_PATHCONV="1")
     r = subprocess.run([sys.executable, os.path.join(HERE, "lab_ssh.py"), target, "run", cmd],
                        capture_output=True, text=True, encoding="utf-8", env=env)
+    if "[exit " not in r.stdout + r.stderr:
+        # lab_ssh itself failed (e.g. run from a venv without paramiko): an
+        # empty result here would read as "no events".
+        sys.exit(f"lab_ssh failed for {log}:\n{r.stderr[-2000:]}")
     return r.stdout
 
 
