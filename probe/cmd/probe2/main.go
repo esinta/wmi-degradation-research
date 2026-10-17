@@ -22,6 +22,7 @@ import (
 
 	"wmiresearch/probe/internal/abort"
 	"wmiresearch/probe/internal/catalog"
+	"wmiresearch/probe/internal/etw"
 	"wmiresearch/probe/internal/isolation"
 	"wmiresearch/probe/internal/preflight"
 	"wmiresearch/probe/internal/runner"
@@ -53,6 +54,8 @@ func main() {
 		err = cmdRun(ctx, os.Args[2:])
 	case "preflight":
 		err = cmdPreflight(ctx, os.Args[2:])
+	case "wmiwatch":
+		err = cmdWMIWatch(ctx, os.Args[2:])
 	case "version":
 		fmt.Println("probe2", commit)
 	default:
@@ -64,13 +67,64 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: probe2 run|preflight|version [flags]  (probe2 run -h for flags)")
+	fmt.Fprintln(os.Stderr, "usage: probe2 run|preflight|wmiwatch|version [flags]  (probe2 run -h for flags)")
 	os.Exit(2)
 }
 
 func hostname() string {
 	h, _ := os.Hostname()
 	return h
+}
+
+// startMeter starts the ETW foreign-WMI meter. A meter that cannot start is
+// recorded, not fatal: the arm's foreign-WMI validity is then unknown.
+func startMeter(ctx context.Context, on, period time.Duration) (*etw.Meter, string, func()) {
+	if on <= 0 {
+		return nil, "off", func() {}
+	}
+	m, err := etw.NewMeter(on, period)
+	if err != nil {
+		log.Printf("ETW meter unavailable: %v", err)
+		return nil, "unavailable: " + err.Error(), func() {}
+	}
+	mctx, cancel := context.WithCancel(ctx)
+	go m.Run(mctx)
+	return m, fmt.Sprintf("on %s every %s", on, period), func() {
+		cancel()
+		if err := m.Close(); err != nil {
+			log.Printf("ETW meter close: %v", err)
+		}
+	}
+}
+
+// cmdWMIWatch prints WMI operation starts by client process (ETW, no WMI
+// calls): a quick check of what else uses WMI on a host.
+func cmdWMIWatch(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("wmiwatch", flag.ExitOnError)
+	dur := fs.Duration("duration", time.Minute, "how long to watch")
+	every := fs.Duration("every", 10*time.Second, "print interval")
+	_ = fs.Parse(args)
+	m, desc, stop := startMeter(ctx, time.Hour, time.Hour)
+	defer stop()
+	if m == nil {
+		return errors.New(desc)
+	}
+	end := time.Now().Add(*dur)
+	for time.Now().Before(end) {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(*every):
+		}
+		d := m.Drain()
+		log.Printf("on %.0fs: self %d foreign %d internal %d lost %d %s", d.OnFor.Seconds(), d.Self, d.Foreign, d.Internal, d.Lost, d.Enabling)
+		for _, c := range d.Counts {
+			if !c.Self {
+				log.Printf("  pid %d %s local=%v internal=%v ops %d: %s", c.ClientPID, c.Image, c.Local, c.Internal, c.Ops, c.Sample)
+			}
+		}
+	}
+	return nil
 }
 
 func runID() string { return time.Now().UTC().Format("20060102T150405Z") }
@@ -96,6 +150,8 @@ func cmdRun(ctx context.Context, args []string) error {
 	sample := fs.Duration("sample-interval", 10*time.Second, "resource sample interval")
 	hangWarn := fs.Duration("hang-warn", 10*time.Minute, "flag a call running this long")
 	hangAbort := fs.Duration("hang-abort", 60*time.Minute, "abort the arm when a call runs this long (0 = never)")
+	etwOn := fs.Duration("etw-on", time.Minute, "ETW foreign-WMI meter: on this long per period (0 = no meter)")
+	etwPeriod := fs.Duration("etw-period", 15*time.Minute, "ETW meter duty-cycle period")
 	release := fs.Duration("release-test", 0, "after the arm, close all connections and keep sampling this long (ST-3)")
 	truthOn := fs.Bool("truth", true, "check results against non-WMI ground truth")
 	maxInduced := fs.Float64("max-induced-cpu", abort.Defaults().MaxInducedCPUPct, "abort when probe-induced CPU stays above this % for 10 min")
@@ -168,7 +224,14 @@ func cmdRun(ctx context.Context, args []string) error {
 	}
 	log.Printf("arm %s: k=%g (%.0f queries/h), %s, strategy %s, %d namespaces, output %s",
 		cfg.Arm, cfg.K, cfg.K*catalog.PerHourTotal(qs), cfg.Duration, st.Kind, len(catalog.Namespaces(qs)), cfg.Dir())
-	sum, err := runner.Run(ctx, cfg, runner.NativeEnv(*outRoot, attribution))
+	env := runner.NativeEnv(*outRoot, attribution)
+	meter, desc, stopMeter := startMeter(ctx, *etwOn, *etwPeriod)
+	defer stopMeter()
+	if meter != nil {
+		env.Meter = meter
+	}
+	env.MeterDesc = desc
+	sum, err := runner.Run(ctx, cfg, env)
 	log.Printf("end: %s; queries %d ok %d errors %d abandoned %d; silent S1..S5 %d/%d/%d/%d/%d; recycles %d; induced CPU %.1f %%",
 		sum.EndReason, sum.Totals["queries"], sum.Totals["ok"], sum.Totals["errors"], sum.Totals["abandoned"],
 		sum.Totals["s1"], sum.Totals["s2"], sum.Totals["s3"], sum.Totals["s4"], sum.Totals["s5"], sum.Totals["recycles"], sum.MeanInducedCPU)
@@ -203,7 +266,10 @@ func cmdPreflight(ctx context.Context, args []string) error {
 	for _, f := range findings {
 		log.Printf("isolation: %s %s running (%s): this host is not clean", f.Kind, f.Name, f.Why)
 	}
+	meter, desc, stopMeter := startMeter(ctx, time.Hour, time.Hour) // always on in pre-flight
+	defer stopMeter()
 	res, dir, err := preflight.Run(ctx, preflight.Config{
+		Meter: meter, MeterDesc: desc,
 		OutRoot: *outRoot, Host: *host, RunID: runID(), Idle: *idle, UnloadWatch: *unload,
 		Ramp: ks, RampStep: *step, RampBudget: *budget, Commit: commit, Priority: priority, Log: log.Printf,
 	})

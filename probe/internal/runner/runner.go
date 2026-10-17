@@ -23,6 +23,7 @@ import (
 
 	"wmiresearch/probe/internal/abort"
 	"wmiresearch/probe/internal/catalog"
+	"wmiresearch/probe/internal/etw"
 	"wmiresearch/probe/internal/out"
 	"wmiresearch/probe/internal/sampler"
 	"wmiresearch/probe/internal/sched"
@@ -80,6 +81,10 @@ type Env struct {
 	Truth   truth.Sources
 	Sampler interface{ Sample() sampler.Sample }
 	OSInfo  sysinfo.OSInfo
+	// Meter is the ETW foreign-WMI meter (nil = none); MeterDesc goes to
+	// meta.json ("on 1m0s every 15m0s", or why it is unavailable).
+	Meter     interface{ Drain() etw.Drained }
+	MeterDesc string
 }
 
 // NativeEnv is the production environment.
@@ -108,6 +113,7 @@ type Meta struct {
 	ClientClass   string            `json:"client_class"`
 	Bug           string            `json:"bug,omitempty"`
 	ProbeCommit   string            `json:"probe_commit"`
+	ETW           string            `json:"etw_meter"`
 	Priority      string            `json:"priority_class"`
 	GoVersion     string            `json:"go_version"`
 	Args          []string          `json:"args"`
@@ -234,6 +240,7 @@ type Runner struct {
 	connects, connectFails, recycles                     atomic.Uint64
 	scheduled, dropped                                   atomic.Uint64
 	hungNow                                              atomic.Int64
+	wmiOpsSelf, wmiOpsForeign, wmiOpsInternal            uint64 // sampler goroutine only
 	recMu                                                sync.Mutex
 	recByReason                                          map[string]uint64
 
@@ -292,7 +299,7 @@ func Run(ctx context.Context, cfg Config, env Env) (Summary, error) {
 
 	r.meta = Meta{
 		SchemaVersion: out.SchemaVersion, RunID: cfg.RunID, Arm: cfg.Arm, Host: cfg.Host, ClientClass: cfg.ClientClass, Bug: cfg.Bug,
-		ProbeCommit: cfg.Commit, Priority: cfg.Priority, GoVersion: runtime.Version(), Args: cfg.Args, Mix: cfg.Mix, K: cfg.K,
+		ProbeCommit: cfg.Commit, ETW: env.MeterDesc, Priority: cfg.Priority, GoVersion: runtime.Version(), Args: cfg.Args, Mix: cfg.Mix, K: cfg.K,
 		PerHourAtK: cfg.K * catalog.PerHourTotal(cfg.Queries), CatalogHash: catalog.Hash(cfg.Queries), Catalog: cfg.Queries,
 		Strategy: string(cfg.Strategy.Kind), Abandons: cfg.Strategy.Abandons(), DeadlineMS: cfg.Deadline.Milliseconds(),
 		Cimv2Conns: cfg.Cimv2Conns, Seed: cfg.Seed, Duration: cfg.Duration.String(), Truth: cfg.Truth,

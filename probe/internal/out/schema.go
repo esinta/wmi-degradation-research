@@ -4,7 +4,7 @@ package out
 // add columns at the end and bump SchemaVersion.
 
 // SchemaVersion is recorded in meta.json.
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 var QueryCols = []string{
 	"run_id", "arm", "query_seq", "ts_start", "due_lag_ms",
@@ -39,7 +39,15 @@ var HostCols = []string{
 	"s1_total", "s2_total", "s3_total", "s4_total", "s5_total",
 	"connects_total", "connect_fail_total", "recycles_total", "recycles_by_reason",
 	"wmiprvse_count", "wmiprvse_exits_total", "sched_scheduled", "sched_dropped",
+	// v2: ETW WMI-Activity meter (design §7). etw_on: provider enabled at
+	// the sample; ops totals count only while it was on.
+	"etw_on", "wmi_ops_self_total", "wmi_ops_foreign_total", "etw_lost", "wmi_ops_internal_total",
 }
+
+// WmiOpsCols (v2): WMI operation starts per client process per sample
+// interval, from the ETW meter. on_s is how long the meter was on in the
+// interval; rows are written only for clients with ops > 0.
+var WmiOpsCols = []string{"ts", "on_s", "client_pid", "client_image", "is_local", "is_self", "is_internal", "ops", "sample_op"}
 
 var EventCols = []string{"ts", "kind", "slot", "conn_id", "pid", "detail"}
 
@@ -49,6 +57,6 @@ var TruthCols = []string{"ts", "query_seq", "query_key", "kind", "missing_keys",
 func Schemas() map[string][]string {
 	return map[string][]string{
 		"queries": QueryCols, "connections": ConnCols, "procs": ProcCols,
-		"host": HostCols, "events": EventCols, "truth": TruthCols,
+		"host": HostCols, "events": EventCols, "truth": TruthCols, "wmiops": WmiOpsCols,
 	}
 }

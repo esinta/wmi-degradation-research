@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"wmiresearch/probe/internal/abort"
+	"wmiresearch/probe/internal/etw"
 	"wmiresearch/probe/internal/hresult"
 	"wmiresearch/probe/internal/truth"
 	"wmiresearch/probe/internal/wmi"
@@ -281,6 +282,21 @@ func (r *Runner) sampleOnce() *sampleView {
 	}
 	v.probeMB, v.probeHandles = float64(smp.Probe.Private)/(1<<20), float64(smp.Probe.Handles)
 
+	etwOn, lost := "", ""
+	if r.env.Meter != nil {
+		d := r.env.Meter.Drain()
+		etwOn, lost = strconv.FormatBool(d.On), itoa(d.Lost)
+		r.wmiOpsSelf += d.Self
+		r.wmiOpsForeign += d.Foreign
+		r.wmiOpsInternal += d.Internal
+		for _, c := range WmiOpsRows(smp.Time, d) {
+			r.noteWriteErr(r.ws.W("wmiops").Write(c))
+		}
+		if d.Enabling != "" {
+			r.event("etw_error", "", "", 0, d.Enabling)
+		}
+	}
+
 	running, _ := wmi.CallStats()
 	f := func(x float64) string { return strconv.FormatFloat(x, 'f', 2, 64) }
 	r.noteWriteErr(r.ws.W("host").Write([]string{
@@ -291,6 +307,7 @@ func (r *Runner) sampleOnce() *sampleView {
 		itoa(r.silent[0].Load()), itoa(r.silent[1].Load()), itoa(r.silent[2].Load()), itoa(r.silent[3].Load()), itoa(r.silent[4].Load()),
 		itoa(r.connects.Load()), itoa(r.connectFails.Load()), itoa(r.recycles.Load()), r.recyclesByReason(),
 		itoa(smp.WmiPrvSE), itoa(smp.Exits), itoa(r.scheduled.Load()), itoa(r.dropped.Load()),
+		etwOn, itoa(r.wmiOpsSelf), itoa(r.wmiOpsForeign), lost, itoa(r.wmiOpsInternal),
 	}))
 	return v
 }
@@ -336,3 +353,16 @@ func (r *Runner) checkHangs() {
 
 // Totals is exported for the CLI summary.
 func (r *Runner) Totals() map[string]uint64 { return r.totals() }
+
+// WmiOpsRows renders one meter drain as wmiops rows (clients with ops > 0).
+func WmiOpsRows(at time.Time, d etw.Drained) [][]string {
+	var rows [][]string
+	for _, c := range d.Counts {
+		if c.Ops == 0 {
+			continue
+		}
+		rows = append(rows, []string{ts(at), strconv.FormatFloat(d.OnFor.Seconds(), 'f', 1, 64), itoa(c.ClientPID), c.Image,
+			strconv.FormatBool(c.Local), strconv.FormatBool(c.Self), strconv.FormatBool(c.Internal), itoa(c.Ops), c.Sample})
+	}
+	return rows
+}

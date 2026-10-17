@@ -70,7 +70,11 @@ Each arm is `python tools/probe_task.py <t> <arm> -- <args>`. `PF` below is the 
 | B1 | `run -arm buggy-B1-hi -client-class buggy -bug array-leak -k KH/10 -duration 4h -preflight PF`, then `-arm buggy-B1-lo -k KH/40` |
 | B2 | `run -arm buggy-B2-c1 -client-class buggy -bug cross-apartment -cimv2-conns 1 -k KH -duration 4h -preflight PF`, then `-arm buggy-B2-c5 -cimv2-conns 5` |
 
-**Inspecting a probe host:** use only non-WMI tools (tasklist, sc, schtasks, reg, wevtutil, `Get-Process`, `Get-Service`). `Get-CimInstance`, `Get-WmiObject`, `Get-NetIPAddress`, `Get-ScheduledTask`, `Get-Mp*` and `Get-NetFirewall*` all go through WMI and start provider hosts.
+**Inspecting a probe host:** use only non-WMI tools: `sc`, `schtasks`, `reg`, `type`, `wevtutil`, `certutil`, PowerShell `Get-Process`/`Get-Service`/`Get-Content`. These were measured with `probe2 wmiwatch` at 0 WMI operations.
+
+**`tasklist.exe` uses WMI** (measured: Connect plus a `Win32_Process` query, and it starts a CIMWin32 provider host). So do `Get-CimInstance`, `Get-WmiObject`, `Get-NetIPAddress`, `Get-ScheduledTask`, `Get-Mp*` and `Get-NetFirewall*`.
+
+`probe2 wmiwatch -duration 60s` lists WMI operations by client process from ETW, without making WMI calls.
 
 Write the arithmetic out (e.g. `-k 5` for KH/10 when KH = 50).
 

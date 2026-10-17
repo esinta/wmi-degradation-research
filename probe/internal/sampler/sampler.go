@@ -121,12 +121,7 @@ func (s *Sampler) Sample() Sample {
 		}
 		s.prevCPU[k] = cpu
 		seen[k] = true
-		acct, ok := s.acct[k]
-		if !ok {
-			acct, _ = sysinfo.Account(p.PID)
-			s.acct[k] = acct
-		}
-		r := []string{ts, role, u(p.PID), ftime(p.Create), p.Name, acct, label,
+		r := []string{ts, role, u(p.PID), ftime(p.Create), p.Name, s.account(k), label,
 			u64(p.Private), u64(p.WorkingSet), u(p.Handles), u(p.Threads),
 			strconv.FormatInt(p.KernelTime/10000, 10), strconv.FormatInt(p.UserTime/10000, 10),
 			"", "", "", "", modHash, svc}
@@ -198,6 +193,16 @@ func (s *Sampler) Sample() Sample {
 	return out
 }
 
+// account caches each process's account by (pid, create time).
+func (s *Sampler) account(k key) string {
+	acct, ok := s.acct[k]
+	if !ok {
+		acct, _ = sysinfo.Account(k.pid)
+		s.acct[k] = acct
+	}
+	return acct
+}
+
 // label is the WmiPrvSE's account plus the provider DLLs from the catalog's
 // attribution map that it has loaded.
 func (s *Sampler) label(k key, mods []string) string {
@@ -208,7 +213,7 @@ func (s *Sampler) label(k key, mods []string) string {
 		}
 	}
 	sort.Strings(hits)
-	return s.acct[k] + "|" + strings.Join(hits, "+")
+	return s.account(k) + "|" + strings.Join(hits, "+")
 }
 
 func contains(list []string, s string) bool {

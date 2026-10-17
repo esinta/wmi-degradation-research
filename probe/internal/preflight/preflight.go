@@ -19,6 +19,7 @@ import (
 
 	"wmiresearch/probe/internal/abort"
 	"wmiresearch/probe/internal/catalog"
+	"wmiresearch/probe/internal/etw"
 	"wmiresearch/probe/internal/hresult"
 	"wmiresearch/probe/internal/isolation"
 	"wmiresearch/probe/internal/out"
@@ -41,7 +42,11 @@ type Config struct {
 	RampBudget  float64 // max mean induced CPU % for k_H
 	Commit      string
 	Priority    string
-	Log         func(format string, args ...any)
+	// Meter is an always-on ETW foreign-WMI meter (nil = none) and its
+	// description for the JSON.
+	Meter     *etw.Meter
+	MeterDesc string
+	Log       func(format string, args ...any)
 }
 
 // Provider is one class's attribution.
@@ -116,6 +121,35 @@ type Result struct {
 	Ramp         []RampStep           `json:"ramp,omitempty"`
 	KH           float64              `json:"k_h,omitempty"`
 	Notes        []string             `json:"notes,omitempty"`
+	ETW          string               `json:"etw_meter"`
+	// Catalog: every catalog query once, as the arms send it. Keys that fail
+	// here fail deterministically (bad WQL copied from production) and are
+	// reported separately from the error-rate metric P4.
+	Catalog []CatalogCheck `json:"catalog_check"`
+	// IdleForeign: WMI operation starts by other processes during the idle
+	// baseline, from the ETW meter (design §8 PF).
+	IdleForeign       []ForeignClient `json:"idle_foreign_clients"`
+	IdleForeignPerH   float64         `json:"idle_foreign_ops_per_hour"`
+	IdleMeterOnSecond float64         `json:"idle_meter_on_s"`
+}
+
+// CatalogCheck is one catalog query's result in pre-flight.
+type CatalogCheck struct {
+	Key    string `json:"key"`
+	Status string `json:"status"`
+	Code   string `json:"code,omitempty"`
+	Op     string `json:"err_op,omitempty"`
+	Rows   int    `json:"rows"`
+	Skips  int    `json:"items_skipped_props_failed,omitempty"`
+}
+
+// ForeignClient is one non-probe WMI client seen by the meter.
+type ForeignClient struct {
+	PID    uint32 `json:"pid"`
+	Image  string `json:"image"`
+	Local  bool   `json:"local"`
+	Ops    uint64 `json:"ops"`
+	Sample string `json:"sample_op"`
 }
 
 // Run executes the pre-flight and writes preflight.json in its directory.
@@ -128,13 +162,13 @@ func Run(ctx context.Context, cfg Config) (*Result, string, error) {
 	if _, err := os.Stat(dir); err == nil {
 		return nil, "", fmt.Errorf("%s exists", dir)
 	}
-	ws, err := out.NewSet(dir, map[string][]string{"procs": out.ProcCols, "events": out.EventCols})
+	ws, err := out.NewSet(dir, map[string][]string{"procs": out.ProcCols, "events": out.EventCols, "wmiops": out.WmiOpsCols})
 	if err != nil {
 		return nil, "", err
 	}
 	defer ws.Close()
 
-	res := &Result{RunID: cfg.RunID, ProbeCommit: cfg.Commit, Priority: cfg.Priority, StartUTC: time.Now().UTC(), OS: sysinfo.GetOSInfo(runtime.NumCPU()),
+	res := &Result{RunID: cfg.RunID, ProbeCommit: cfg.Commit, Priority: cfg.Priority, ETW: cfg.MeterDesc, StartUTC: time.Now().UTC(), OS: sysinfo.GetOSInfo(runtime.NumCPU()),
 		Namespaces: map[string]Namespace{}, Providers: map[string]Provider{}, Attribution: map[string]string{}}
 	res.Account, _ = sysinfo.Account(uint32(os.Getpid()))
 	res.Isolation, _ = isolation.Check()
@@ -151,6 +185,8 @@ func Run(ctx context.Context, cfg Config) (*Result, string, error) {
 	}
 
 	smp := sampler.New(dir, nil)
+	idle := true
+	foreign := map[uint32]*ForeignClient{}
 	write := func(s sampler.Sample) {
 		for _, r := range s.ProcRows {
 			_ = ws.W("procs").Write(r)
@@ -158,11 +194,51 @@ func Run(ctx context.Context, cfg Config) (*Result, string, error) {
 		for _, e := range s.Events {
 			_ = ws.W("events").Write(e)
 		}
+		if cfg.Meter == nil {
+			return
+		}
+		d := cfg.Meter.Drain()
+		for _, r := range runner.WmiOpsRows(s.Time, d) {
+			_ = ws.W("wmiops").Write(r)
+		}
+		if !idle {
+			return
+		}
+		res.IdleMeterOnSecond += d.OnFor.Seconds()
+		for _, c := range d.Counts {
+			if c.Self || c.Internal || c.Ops == 0 {
+				continue
+			}
+			f := foreign[c.ClientPID]
+			if f == nil {
+				f = &ForeignClient{PID: c.ClientPID, Image: c.Image, Local: c.Local, Sample: c.Sample}
+				foreign[c.ClientPID] = f
+			}
+			f.Ops += c.Ops
+		}
 	}
 
 	// 1. Idle baseline: what WMI looks like before the probe touches it.
 	log("idle baseline: %s", cfg.Idle)
-	if !sleepSampling(ctx, cfg.Idle, 10*time.Second, smp, write) {
+	if cfg.Meter != nil {
+		cfg.Meter.Drain() // start the idle window clean
+	}
+	ok := sleepSampling(ctx, cfg.Idle, 10*time.Second, smp, write)
+	idle = false
+	var ops uint64
+	for _, f := range foreign {
+		res.IdleForeign = append(res.IdleForeign, *f)
+		ops += f.Ops
+	}
+	sort.Slice(res.IdleForeign, func(i, j int) bool { return res.IdleForeign[i].Ops > res.IdleForeign[j].Ops })
+	if res.IdleMeterOnSecond > 0 {
+		res.IdleForeignPerH = float64(ops) * 3600 / res.IdleMeterOnSecond
+		log("idle: %d foreign WMI operations from %d processes (%.0f/h)", ops, len(foreign), res.IdleForeignPerH)
+		if res.IdleForeignPerH > 60 {
+			res.Notes = append(res.Notes, fmt.Sprintf("idle foreign WMI rate %.0f/h is over the 60/h limit (design §7)", res.IdleForeignPerH))
+		}
+	}
+	if !ok {
 		return finish(res, dir, "interrupted")
 	}
 
@@ -218,6 +294,31 @@ func Run(ctx context.Context, cfg Config) (*Result, string, error) {
 		}
 		res.Providers[q.Class] = p
 		log("class %s: provider %q hosting %q dll %q", q.Class, p.Provider, p.HostingModel, p.DLL)
+	}
+	var bad []string
+	for _, q := range qs {
+		c := conns[q.Namespace]
+		if c == nil {
+			continue
+		}
+		wql := q.WQL
+		switch {
+		case q.Truth == catalog.TruthPID:
+			wql = fmt.Sprintf(q.WQL, os.Getpid())
+		case strings.Contains(q.WQL, "%s"):
+			wql = fmt.Sprintf(q.WQL, time.Now().Add(-2*time.Minute).UTC().Format("20060102150405")+".000000+000")
+		}
+		r := c.Query(ctx, wql, time.Minute, false, nil)
+		cc := CatalogCheck{Key: q.Key, Status: string(r.Status), Rows: r.RowsN, Skips: r.ItemsSkipped + r.PropsFailed}
+		if r.Err != nil {
+			cc.Code, cc.Op = hresult.Name(hresult.Effective(r.Err.HR, r.Err.SCode)), r.Err.Op
+			bad = append(bad, q.Key+" "+cc.Code)
+		}
+		res.Catalog = append(res.Catalog, cc)
+		log("catalog %s: %s %s rows %d", q.Key, cc.Status, cc.Code, cc.Rows)
+	}
+	if len(bad) > 0 {
+		res.Notes = append(res.Notes, "catalog queries failing in pre-flight (deterministic; report apart from P4): "+strings.Join(bad, ", "))
 	}
 	if c := conns[`root`]; c != nil {
 		res.Quotas = rows(c.Query(ctx, "SELECT * FROM __ProviderHostQuotaConfiguration", time.Minute, false, nil))
@@ -284,7 +385,11 @@ func Run(ctx context.Context, cfg Config) (*Result, string, error) {
 				HangWarn: 10 * time.Minute, HangAbort: 30 * time.Minute, Truth: true, Attribution: res.Attribution,
 				Limits: abort.Defaults(), Commit: cfg.Commit, Priority: cfg.Priority,
 			}
-			sum, err := runner.Run(ctx, rc, runner.NativeEnv(rc.OutRoot, res.Attribution))
+			env := runner.NativeEnv(rc.OutRoot, res.Attribution)
+			if cfg.Meter != nil {
+				env.Meter, env.MeterDesc = cfg.Meter, cfg.MeterDesc
+			}
+			sum, err := runner.Run(ctx, rc, env)
 			step := RampStep{K: k, EndReason: sum.EndReason, MeanInducedCPU: sum.MeanInducedCPU, MeanHostCPU: sum.MeanHostCPU,
 				Queries: sum.Totals["queries"], Dropped: sum.Totals["dropped"], Errors: sum.Totals["errors"], Dir: sum.Dir}
 			if err != nil {
