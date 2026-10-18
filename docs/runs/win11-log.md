@@ -33,7 +33,7 @@ This follows `win2-log.md`. Every host action is listed, and WMI-touching ones a
 | 2026-10-18 23:21:45 | User chose "extend sshd rule to Public": `netsh advfirewall firewall set rule name="OpenSSH SSH Server (sshd)" dir=in new profile=private,public` (Allow, TCP 22). |
 | 2026-10-18 23:21:48 | `netsh advfirewall set allprofiles state on`: **firewall ON for all profiles**, as on win2. A new SSH session connects (23:21:50). The network stays on Win11's default, Public. No WMI. |
 | 2026-10-18 23:22:25 | Deployed probe2 **c4d1794036e4** to `C:\probe\probe2.exe` (sha256 45d83a01…, verified with certutil; `probe2 version`). This is the same build as win2's E-fault and H runs, with WMI client code identical to win2's ST-1/ST-2 build 379cdbca207a. 32 GB free. |
-| 2026-10-18 23:23:29–23:23:32 | **[WMI]** SKU checks, `tools/win_sku_checks.ps1` → `results/WIN11-LAB/sku/sku-20261018.json`. Before pre-flight's idle baseline. Results below. |
+| 2026-10-18 23:23:29–23:23:32 | **[WMI]** SKU checks, `tools/win_sku_checks.ps1` → `results/win11-lab/sku/sku-20261018.json`. Before pre-flight's idle baseline. Results below. |
 | 2026-10-18 23:24 | Non-WMI follow-up: `reg query …\Services\vwifibus` and `dir` of its binary on win11 and win2. |
 
 ## SKU-sensitive facts (before the timed runs)
@@ -53,3 +53,5 @@ This follows `win2-log.md`. Every host action is listed, and WMI-touching ones a
 | `__ProviderHostQuotaConfiguration` | MemoryPerHost 536,870,912; MemoryAllHosts 1,073,741,824; ThreadsPerHost 256; HandlesPerHost 4,096; ProcessLimitAllHosts 32 | **identical** |
 
 The probe's strict-loop codes for the three failing queries (which call fails, and the HRESULT) come from pre-flight's catalog check. The Get-CimInstance messages above come through the MI client and only show that each query fails.
+| 2026-10-18 23:24:41 | Non-WMI `Get-Process WmiPrvSE`: none running. The hosts from the SKU checks have exited. |
+| 2026-10-18 23:24:47 | **[WMI]** **Pre-flight started**: `probe_task.py win11 preflight -- preflight -ramp 1,5,10,20,50,100` (c4d1794036e4; SYSTEM, Normal priority; ETW meter always on). Defaults as in win2's pre-flight of record: 60 min idle baseline, namespace/provider/catalog checks, 30 min unload watch, 6 × 10 min ramp. Log `C:\probe\logs\preflight-20261018T232447Z.log`; results under `C:\probe\results\win11-lab\`. Expected end ≈01:30Z. The console session stays logged on; the idle meter measures its WMI traffic. |
