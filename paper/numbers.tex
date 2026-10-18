@@ -8,9 +8,9 @@
 \newcommand{\STaPerRead}{0.06}
 \newcommand{\STaPerReadCI}{[$-0.01$, 0.14]}
 \newcommand{\STaArrayReads}{3.48\,M}
-% ST-2 (buggy-ST-2, array-leak positive control): PENDING.
-\newcommand{\STbLeak}{\textbf{[ST-2 PENDING]}}
-\newcommand{\STbSummary}{\textbf{[ST-2 result pending.]}}
+% ST-2: results/win10-lab/buggy-ST-2/20261018T072639Z, analysis/gate.py (window 07:56:39-08:26:39Z).
+\newcommand{\STbLeak}{140--300}
+\newcommand{\STbSummary}{at $k=10$ for 1\,h (3{,}180 queries and 31{,}650 array reads in the 30-minute measurement window) the client's private bytes grew 8.5\,MB/h, i.e.\ 141.5\,B per array read (95\% CI [139.3, 143.6]), against 0.06\,B for the correct client (Table~\ref{tab:st1}); the probe's own ledger flagged 780 unreleased values. The leak grows with reads, not with connection age, and Agent A's data above show that recycling does not release it.}
 % E-fault: PENDING.
 \newcommand{\EfaultHeadline}{\textbf{[E-fault pending.]}}
 \newcommand{\EfaultSection}{\textbf{[E-fault results pending.]}}

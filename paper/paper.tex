@@ -43,9 +43,9 @@ We make four contributions.
 
 \section{Background}
 A client calls \code{IWbemServices} in the WMI service (\code{Winmgmt}), which dispatches each class to a provider.
-In-process providers run in shared \code{WmiPrvSE.exe} host processes, one per hosting model (e.g.\ \code{NetworkServiceHost}, \code{LocalServiceHost})~\cite{ms-hosting}.
-WMI unloads a provider once it has been idle for its cache-control \code{ClearAfter} interval (``anywhere from the interval \ldots{} to twice that interval'')~\cite{ms-unload,ms-cachecontrol}, and kills a host that exceeds the \code{\_\_ProviderHostQuotaConfiguration} limits~\cite{ms-quota}.
-Queries issued with \code{wbemFlagReturnImmediately|wbemFlagForwardOnly} are semisynchronous: \code{ExecQuery} returns an enumerator at once, and errors surface from \code{IEnumWbemClassObject::Next}, which returns \hr{WBEM\_S\_FALSE} at the normal end and an error \code{HRESULT} otherwise~\cite{ms-next}.
+In-process providers run in shared \code{WmiPrvSE.exe} host processes, one per hosting model such as NetworkService or LocalService~\cite{ms-hosting}.
+WMI unloads a provider once it has been idle for its cache-control interval (\code{ClearAfter}; unloading takes ``anywhere from the interval \ldots{} to twice that interval'')~\cite{ms-unload,ms-cachecontrol}, and enforces per-host quotas on memory, threads and handles~\cite{ms-quota}.
+Queries issued with the return-immediately and forward-only flags (0x30) are semisynchronous: \code{ExecQuery} returns an enumerator at once, and errors surface later from \code{IEnumWbemClassObject::Next}, which returns \hr{WBEM\_S\_FALSE} at the normal end of a result~\cite{ms-next}.
 The scripting objects are apartment-threaded: a call from another apartment is marshalled to the owning single-threaded apartment (STA)~\cite{ms-sta}, and property values arrive as \code{VARIANT}s that the caller must free with \code{VariantClear}, which frees strings and arrays~\cite{ms-variantclear}.
 
 \section{Method}\label{sec:method}
