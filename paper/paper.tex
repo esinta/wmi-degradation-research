@@ -1,0 +1,205 @@
+\documentclass[letterpaper,twocolumn,10pt]{article}
+\usepackage[T1]{fontenc}
+\usepackage{mathptmx}
+\usepackage[margin=0.75in,columnsep=0.3in]{geometry}
+\usepackage{booktabs,graphicx,microtype,xcolor,url,amsmath}
+\usepackage[hidelinks]{hyperref}
+\usepackage{listings}
+\lstset{basicstyle=\ttfamily\footnotesize,columns=fullflexible,frame=none,numbers=left,numberstyle=\tiny,xleftmargin=1.5em,firstnumber=auto}
+\newcommand{\code}[1]{\texttt{\small #1}}
+\newcommand{\hr}[1]{\texttt{\small #1}}
+\input{numbers.tex}
+
+\title{\Large\bfseries Clients Rot, Connections Don't:\\ Degradation, Silent Failures and Refresh in Long-Lived WMI Connections}
+\author{Author Name\\ \normalsize Affiliation}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Windows management agents commonly recycle their WMI connections every few hours on the belief that long-lived connections degrade.
+We test that belief with a purpose-built client that follows COM's threading and memory rules by construction, checks every result against a non-WMI source of truth, and attributes resource use to the individual WMI provider host serving each query.
+On Windows Server 2019, a single set of connections served \STaQueries{} queries over 6\,h at 100$\times$ a production agent's query rate (about 25 production-days of queries) with no measurable growth in client memory (\STaPrivSlope{}\,MB/h, 95\% CI \STaPrivCI{}), handles, provider-host memory or per-query latency.
+The degradation operators actually observe is client-induced: an unreleased \code{VARIANT} array leaks about \STbLeak{}\,B per array-valued property read, and calls made across COM apartments cost about 3$\times$ the CPU per query.
+More consequential are \emph{silent} failures, where an error becomes an empty but successful result: a popular Go COM library ends enumeration without reporting the error, three queries of a production agent have failed on every poll while being logged as successes, and \code{Win32\_SystemDriver} omits a registered driver depending on which properties are selected.
+Fault injection shows where refresh matters: \EfaultHeadline{}
+We conclude that agents should invest in client correctness and result verification, and reconnect on errors rather than on a clock.
+\end{abstract}
+
+\section{Introduction}
+Windows Management Instrumentation (WMI) is the standard inventory and telemetry interface on Windows; endpoint agents, monitoring systems and configuration tools poll it continuously.
+A widespread practice is to treat WMI connections as perishable: agents tear down and recreate their \code{IWbemServices} connections on a timer or a query budget.
+The production agent we studied (``Agent A'') recycles every 6\,h or 50{,}000 queries, a rule motivated by observed memory growth, latency creep and timeouts.
+
+Whether those symptoms come from \emph{connection age} or from the \emph{client} has, to our knowledge, not been measured.
+It is hard to measure: an incorrect client produces exactly these symptoms, the usual metric (memory summed over all \code{WmiPrvSE.exe} processes) mixes every WMI client on the host, and many WMI failures are silent.
+
+We make four contributions.
+(1)~A measurement method that removes these confounders: a client that is correct by construction and self-tested, per-provider-host attribution, an ETW meter of foreign WMI clients, and non-WMI ground truth for results (\S\ref{sec:method}).
+(2)~Evidence that a correct client's connections do not degrade at accelerated query counts, with the age dimension in progress (\S\ref{sec:correct}).
+(3)~Controlled measurements of two client bugs that produce the folklore symptoms, and a catalogue of silent failures (\S\ref{sec:client}, \S\ref{sec:silent}).
+(4)~A fault-injection comparison of refresh strategies (\S\ref{sec:fault}), which yields concrete guidance (\S\ref{sec:discussion}).
+
+\section{Background}
+A client calls \code{IWbemServices} in the WMI service (\code{Winmgmt}), which dispatches each class to a provider.
+In-process providers run in shared \code{WmiPrvSE.exe} host processes, one per hosting model (e.g.\ \code{NetworkServiceHost}, \code{LocalServiceHost})~\cite{ms-hosting}.
+WMI unloads a provider once it has been idle for its cache-control \code{ClearAfter} interval (``anywhere from the interval \ldots{} to twice that interval'')~\cite{ms-unload,ms-cachecontrol}, and kills a host that exceeds the \code{\_\_ProviderHostQuotaConfiguration} limits~\cite{ms-quota}.
+Queries issued with \code{wbemFlagReturnImmediately|wbemFlagForwardOnly} are semisynchronous: \code{ExecQuery} returns an enumerator at once, and errors surface from \code{IEnumWbemClassObject::Next}, which returns \hr{WBEM\_S\_FALSE} at the normal end and an error \code{HRESULT} otherwise~\cite{ms-next}.
+The scripting objects are apartment-threaded: a call from another apartment is marshalled to the owning single-threaded apartment (STA)~\cite{ms-sta}, and property values arrive as \code{VARIANT}s that the caller must free with \code{VariantClear}, which frees strings and arrays~\cite{ms-variantclear}.
+
+\section{Method}\label{sec:method}
+\paragraph{A correct client.}
+The probe (Go, \texttt{go-ole}) gives every connection its own OS thread initialised as an STA, and makes every COM call for that connection, including release, on that thread.
+Every \code{VARIANT} is cleared exactly once; a ledger counts acquisitions and releases per query and flags outstanding or double releases.
+Enumeration uses a strict loop: \hr{S\_OK} yields an item, \hr{S\_FALSE} with no item ends the result, and any other code is an error recorded with its \code{HRESULT}, WBEM code and the operation that failed.
+A query that exceeds its deadline is abandoned on the caller's side and its row is written when WMI eventually answers.
+
+\paragraph{Workload.}
+The catalogue reproduces Agent A's 23 production queries verbatim across 8 namespaces (22 queries in 7 namespaces exist on our host; BitLocker's namespace is absent) (processes, services, drivers, event logs, firewall rules and filters, Defender status, WMI subscriptions, scheduled tasks, Device Guard, TPM), each at its production rate: 636 queries/h in total on our host.
+An acceleration factor $k$ multiplies every rate.
+A pre-flight calibration on the test host (10-minute steps, $k\in\{1,5,10,20,50,100\}$) gave probe-induced CPU (probe + all provider hosts + Winmgmt) of 0.4, 1.6, 3.3, 6.3, 15.6 and 29.9\% with no dropped queries; we use $k_H=100$, the top of the ramp, below a 40\% budget.
+
+\paragraph{Attribution and isolation.}
+Every 10\,s the probe samples itself, the \code{Winmgmt} service host (PID from the service control manager) and each \code{WmiPrvSE} by PID and creation time, labelled with its account and the provider DLLs it has loaded; this maps each queried class to the host serving it.
+Nothing here uses WMI.
+A real-time ETW session on \code{Microsoft-Windows-WMI-Activity}~\cite{ms-tracing} counts operation starts by client PID, so foreign WMI clients are measured, not assumed absent.
+We found that \code{tasklist.exe}, the CIM cmdlets and PowerShell remoting all issue WMI calls; host inspection during runs was restricted to tools measured at zero WMI operations.
+
+\paragraph{Ground truth.}
+Results are compared with non-WMI sources taken immediately before and after each query: the process list (\code{NtQuerySystemInformation}), the service control manager, and invariants captured at the start.
+Five silent classes are counted: S1 impossible-empty, S2 truncated (a key present in both truth snapshots is missing), S3 enumeration ended by an error (what a lenient loop would report as success), S4 partial objects, S5 content mismatch.
+
+\paragraph{Testbed and statistics.}
+Windows Server 2019 Standard (build 17763.3650), 2 vCPU, 4\,GB, Defender real-time protection on, no other WMI-heavy software.
+Growth is the OLS slope of 10\,s samples after a 30-minute warm-up with Newey--West standard errors (15-minute lag window)~\cite{newey-west}.
+Pass criteria were fixed before the runs: client private-byte slope $<1$\,MB/h and $<3$\,B per array read (upper 95\% bound), handle range $\le 50$, and $\le 5$\,MB retained after a 1-hour release test.
+
+\section{A correct client does not degrade}\label{sec:correct}
+\begin{table}[t]\centering\small
+\caption{ST-1: one set of connections, strategy \emph{none}, $k=100$, 6\,h (Server 2019). CIs are 95\%, HAC.}\label{tab:st1}
+\begin{tabular}{@{}lr@{}}\toprule
+Queries (ok / deterministic error / abandoned) & \STaQueries{} (\STaOk{} / \STaDetErr{} / 0)\\
+Silent failures above truth baseline & 0\\
+Client private bytes, slope & \STaPrivSlope{} MB/h \STaPrivCI{}\\
+\quad per array-valued read (\STaArrayReads{} reads) & \STaPerRead{} B \STaPerReadCI{}\\
+Client handles: range; slope per 1k queries & 17; 0.034 [0.029, 0.039]\\
+Retained after 1\,h release test & $-0.39$ MB\\
+Provider hosts / Winmgmt over 6\,h & flat (Fig.~\ref{fig:st1})\\
+Connection recycles; induced CPU & 0; 30.2\%\\\bottomrule
+\end{tabular}
+\end{table}
+The self-test arm doubles as our longest correct-client run (Table~\ref{tab:st1}).
+At $k=100$, its 6 hours carry the query count of about 25 days at the production rate.
+All client invariants held on every query (correct apartment, no outstanding, double or leaked \code{VARIANT}s, no panics).
+Median latency per query key stayed flat across connection age, from about 1\,ms (repository classes) to 250\,ms (\code{MSFT\_NetFirewallRule}, 260 rows), and neither the \code{NetworkServiceHost} provider host serving 6 providers nor the \code{Winmgmt} host grew (Fig.~\ref{fig:st1}).
+The single handle step (339 to 347) coincides with one additional Go runtime thread and is flat before and after.
+\HNote{}
+
+\begin{figure}[t]\centering
+\includegraphics[width=\columnwidth]{fig-st1.pdf}
+\caption{ST-1. Top: median latency per 15-minute window against connection age for six query keys. Bottom: private bytes of the two provider hosts (labelled by account and provider DLLs) and of the Winmgmt host; connections were released at 6\,h.}\label{fig:st1}
+\end{figure}
+
+\paragraph{Providers reload anyway.}
+On this host \code{ClearAfter} is 30\,s (15\,s for one class).
+At the production rate most classes are queried less often than that, and the WMI-Activity log showed the same providers reloading every 1--2 minutes \emph{inside} a long-lived host process (event 5857 for \code{ntevt}, \code{wfascim}, \code{schedprov}, \code{tscfgwmi}, \code{win32\_tpm} and \code{win32\_deviceguard} in one host PID within 10 minutes), and the Defender provider's host itself was replaced.
+After the probe released its connections, idle hosts exited after 60--65\,s.
+A production client therefore already receives a free refresh of provider state every few minutes; only the client-side connection and the WMI service age with it.
+
+\section{What degrades is the client}\label{sec:client}
+\paragraph{Unreleased arrays (Agent A, issue 115).}
+Property values read through \code{Properties\_} that were never passed to \code{VariantClear} leak their \code{SAFEARRAY}s.
+In production this appeared as steady memory growth (+1.45\,MB/h over 13.5\,h on a Windows~10 VM, +2.29\,MB/h over 20\,h on a laptop) that scaled with the firewall collector's frequency (+8.8\,$\pm$\,0.6\,MB/h with the collector at 60\,s, +0.44\,$\pm$\,0.52 after the fix), and that \emph{recycling did not cure}: with recycling working, the working set still grew 2.5\,MB/h, because the leak is in the client process.
+Our positive control re-enables the bug in the probe: \STbSummary{}
+
+\paragraph{Cross-apartment calls (issue 118).}
+Agent A called the apartment-threaded scripting objects from multi-threaded-apartment goroutines, so COM marshalled every call into a single host STA (confirmed in debugger stacks).
+Moving each connection to its own STA cut CPU per collection cycle about 3$\times$ (process poll 1.31--1.40\,s to 0.42--0.44\,s; firewall rules 8.5\,s to 2.8\,s) and steady-state CPU on a busy 16-CPU laptop from 28.3\% to 3.5--3.9\% of a core, eliminating 1{,}490 abandoned calls in 69\,h ($\approx$21/h).
+On a quiet 2-vCPU VM the same bug cost 5.0\% vs 0.9\% and caused no abandoned calls: the symptom scales with host load, which makes it look like ageing on busy machines.
+These production numbers are before/after measurements of one code change, not a controlled experiment, and we report them as such.
+
+\section{Silent failures}\label{sec:silent}
+\paragraph{A library that swallows errors.}
+\texttt{go-ole}'s \code{oleutil.ForEach} (v1.3.0, \code{oleutil.go} lines 118--126)~\cite{go-ole} loops while the number of items returned is positive:
+\begin{lstlisting}[firstnumber=118]
+for item, length, err := enum.Next(1); length > 0;
+    item, length, err = enum.Next(1) {
+  if err != nil { return err }
+  ...
+}
+return nil
+\end{lstlisting}
+When \code{Next} fails with zero items, the loop condition is false, the error is never inspected and the function returns \code{nil}.
+On Server 2019, \code{SELECT * FROM} a non-existent class fails only at \code{Next} with \hr{WBEM\_E\_INVALID\_CLASS} (0x80041010); \code{ForEach} reports success with 0 items, while our strict loop records the error.
+
+\paragraph{Production queries that never worked.}
+Three of Agent A's 23 queries fail at \code{Next} on every call (Table~\ref{tab:silent}).
+Before the agent was stopped, the WMI-Activity log recorded 84 \hr{5858} errors for each of them in 7\,h, while the agent's audit log shows a success with 0 rows and a 0\,ms duration at each of their positions in every collection cycle (the log carries no query text, so this attribution is by position).
+From the agent's code, the consequences are concrete: firewall rules are shipped without their application path, non-standard event consumers are missing from the persistence inventory, and scheduled tasks lack last-run and next-run times.
+Each was a plausible-looking query: \code{Name} exists only on derived consumer classes, \code{MSFT\_NetApplicationFilter} exposes \code{AppPath} rather than \code{Program}, and \code{MSFT\_ScheduledTaskInfo} is not a WMI class on this OS.
+
+\begin{table}[t]\centering\small
+\caption{Silent failures observed on Server 2019. All return success to a lenient client.}\label{tab:silent}
+\begin{tabular}{@{}p{0.47\columnwidth}p{0.45\columnwidth}@{}}\toprule
+Query / class & Observed\\\midrule
+\code{SELECT Name FROM \_\_EventConsumer} & \hr{0x80041017} at \code{Next}, every call\\
+\code{SELECT InstanceID, Program, Package FROM MSFT\_NetApplicationFilter} & \hr{0x80041017} at \code{Next}, every call\\
+\code{\ldots{} FROM MSFT\_ScheduledTaskInfo} & \hr{0x80041010} at \code{Next}, every call\\
+\code{Win32\_SystemDriver} with any configuration property (or \code{*}) & 333 rows; \code{vwifibus} omitted (binary absent); \code{SELECT Name} returns 334\\
+\code{MSFT\_ScheduledTask} at $k=100$ & 3 of 200 queries one task short as the count changed from 135 to 136\\\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{A provider that drops rows.}
+\code{Win32\_SystemDriver} returned 333 drivers whenever the query selected any configuration property (\code{DisplayName}, \code{PathName}, \code{StartMode}, \code{StartName}, \code{ServiceType}, \code{Description}, or \code{*}), and 334 for \code{SELECT Name} or \code{SELECT Name, State}.
+The missing driver, \code{vwifibus}, is registered with the service control manager but its binary is absent.
+No error is returned at any layer; only the comparison with the service control manager reveals it.
+Because the omission is deterministic, we treat it as a per-key truth baseline and count S2 only above it.
+
+\paragraph{Races are not failures.}
+Ground truth has its own error rate.
+In 19{,}716 calibration queries the remaining flags were three scheduled-task counts one short just as the count changed (most likely a task being added) and one process that exited during its query, i.e.\ timing, not WMI.
+Separating these requires bracketing truth before and after each query.
+
+\section{Fault recovery and refresh}\label{sec:fault}
+\EfaultSection{}
+
+\section{Discussion}\label{sec:discussion}
+\paragraph{Guidance.}
+(1)~Make the client correct first: one STA per connection, all COM calls on it, every \code{VARIANT} cleared, and a test that runs a few hundred thousand queries and checks for growth; timed recycling hides neither of the bugs above.
+(2)~Never let an enumeration end without inspecting the last \code{HRESULT}; audit libraries for this pattern.
+(3)~Validate each query once at start-up and verify results against an independent source where one exists; ``0 rows'' is a claim, not a fact.
+(4)~Reconnect on connection-level errors (RPC disconnection, \hr{WBEM\_E\_TRANSPORT\_FAILURE}, \hr{WBEM\_E\_NOT\_AVAILABLE}) by inspecting the effective error code, not only the outer \code{HRESULT}; a timer adds churn and leaves an outage of up to one interval.
+(5)~Do not attribute WmiPrvSE growth to your client without per-host attribution and a foreign-client meter.
+
+\paragraph{Threats to validity.}
+One host, one OS build, one workload.
+Accelerating the query rate tests count, not age: our longest correct-client connection is 6\,h old\HAgeNote{}.
+The ETW meter ran one minute in fifteen during arms, so foreign activity is sampled (it saw one burst of 6 operations, most likely the Windows Update service).
+Agent A's production numbers come from before/after comparisons of single changes on a few hosts.
+Cross-OS replication (Windows~10, Server 2016/2022) is in progress.
+
+\section{Related work}
+Microsoft documents the mechanisms we rely on: provider hosting and unloading~\cite{ms-hosting,ms-unload}, quotas~\cite{ms-quota}, enumeration semantics~\cite{ms-next} and COM apartment rules~\cite{ms-sta}.
+We are not aware of published measurements of WMI connection ageing under a verified-correct client, nor of a catalogue of WMI silent failures; we welcome pointers.
+
+\section{Conclusion}
+Long-lived WMI connections, used correctly, did not degrade in our measurements; the symptoms attributed to ageing were produced by the client, and the costliest failures were silent.
+Refresh is a recovery mechanism, best driven by errors.
+The probe, catalogue and analysis code are available from the authors.
+
+\small
+\begin{thebibliography}{10}
+\bibitem{ms-hosting} Microsoft. \emph{Provider Hosting and Security}. \url{https://learn.microsoft.com/en-us/windows/win32/wmisdk/provider-hosting-and-security}
+\bibitem{ms-unload} Microsoft. \emph{Unloading a Provider}. \url{https://learn.microsoft.com/en-us/windows/win32/wmisdk/unloading-a-provider}
+\bibitem{ms-cachecontrol} Microsoft. \emph{\_\_CacheControl class}. \url{https://learn.microsoft.com/en-us/windows/win32/wmisdk/--cachecontrol}
+\bibitem{ms-quota} Microsoft. \emph{\_\_ProviderHostQuotaConfiguration class}. \url{https://learn.microsoft.com/en-us/windows/win32/wmisdk/--providerhostquotaconfiguration}
+\bibitem{ms-next} Microsoft. \emph{IEnumWbemClassObject::Next}. \url{https://learn.microsoft.com/en-us/windows/win32/api/wbemcli/nf-wbemcli-ienumwbemclassobject-next}
+\bibitem{ms-sta} Microsoft. \emph{Single-Threaded Apartments}. \url{https://learn.microsoft.com/en-us/windows/win32/com/single-threaded-apartments}
+\bibitem{ms-variantclear} Microsoft. \emph{VariantClear function}. \url{https://learn.microsoft.com/en-us/windows/win32/api/oleauto/nf-oleauto-variantclear}
+\bibitem{ms-tracing} Microsoft. \emph{Tracing WMI Activity}. \url{https://learn.microsoft.com/en-us/windows/win32/wmisdk/tracing-wmi-activity}
+\bibitem{go-ole} go-ole contributors. \emph{go-ole v1.3.0, oleutil/oleutil.go}. \url{https://github.com/go-ole/go-ole/blob/v1.3.0/oleutil/oleutil.go}
+\bibitem{newey-west} W.~K. Newey and K.~D. West. A simple, positive semi-definite, heteroskedasticity and autocorrelation consistent covariance matrix. \emph{Econometrica}, 55(3):703--708, 1987.
+\end{thebibliography}
+\end{document}
