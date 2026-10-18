@@ -2,7 +2,7 @@
 \usepackage[T1]{fontenc}
 \usepackage{mathptmx}
 \usepackage[margin=0.75in,columnsep=0.3in]{geometry}
-\usepackage{booktabs,graphicx,microtype,xcolor,url,amsmath}
+\usepackage{array,booktabs,graphicx,microtype,xcolor,url,amsmath}
 \usepackage[hidelinks]{hyperref}
 \usepackage{listings}
 \lstset{basicstyle=\ttfamily\footnotesize,columns=fullflexible,frame=none,numbers=left,numberstyle=\tiny,xleftmargin=1.5em,firstnumber=auto}
@@ -79,14 +79,16 @@ Pass criteria were fixed before the runs: client private-byte slope $<1$\,MB/h a
 \begin{table}[t]\centering\small
 \caption{ST-1: one set of connections, strategy \emph{none}, $k=100$, 6\,h (Server 2019). CIs are 95\%, HAC.}\label{tab:st1}
 \begin{tabular}{@{}lr@{}}\toprule
-Queries (ok / deterministic error / abandoned) & \STaQueries{} (\STaOk{} / \STaDetErr{} / 0)\\
+Queries & \STaQueries{}\\
+\quad ok / deterministic error / abandoned & \STaOk{} / \STaDetErr{} / 0\\
 Silent failures above truth baseline & 0\\
-Client private bytes, slope & \STaPrivSlope{} MB/h \STaPrivCI{}\\
-\quad per array-valued read (\STaArrayReads{} reads) & \STaPerRead{} B \STaPerReadCI{}\\
-Client handles: range; slope per 1k queries & 17; 0.034 [0.029, 0.039]\\
+Client private bytes, slope (MB/h) & \STaPrivSlope{} \STaPrivCI{}\\
+\quad per array read (B; \STaArrayReads{} reads) & \STaPerRead{} \STaPerReadCI{}\\
+Client handles: range & 17\\
+\quad slope per 1k queries & 0.034 [0.029, 0.039]\\
 Retained after 1\,h release test & $-0.39$ MB\\
-Provider hosts / Winmgmt over 6\,h & flat (Fig.~\ref{fig:st1})\\
-Connection recycles; induced CPU & 0; 30.2\%\\\bottomrule
+Provider hosts, Winmgmt host & flat (Fig.~\ref{fig:st1})\\
+Recycles; induced CPU & 0; 30.2\%\\\bottomrule
 \end{tabular}
 \end{table}
 The self-test arm doubles as our longest correct-client run (Table~\ref{tab:st1}).
@@ -141,10 +143,10 @@ Each was a plausible-looking query: \code{Name} exists only on derived consumer 
 
 \begin{table}[t]\centering\small
 \caption{Silent failures observed on Server 2019. All return success to a lenient client.}\label{tab:silent}
-\begin{tabular}{@{}p{0.47\columnwidth}p{0.45\columnwidth}@{}}\toprule
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.47\columnwidth}>{\raggedright\arraybackslash}p{0.45\columnwidth}@{}}\toprule
 Query / class & Observed\\\midrule
 \code{SELECT Name FROM \_\_EventConsumer} & \hr{0x80041017} at \code{Next}, every call\\
-\code{SELECT InstanceID, Program, Package FROM MSFT\_NetApplicationFilter} & \hr{0x80041017} at \code{Next}, every call\\
+\code{SELECT InstanceID, Program, Package FROM MSFT\_Net\allowbreak{}ApplicationFilter} & \hr{0x80041017} at \code{Next}, every call\\
 \code{\ldots{} FROM MSFT\_ScheduledTaskInfo} & \hr{0x80041010} at \code{Next}, every call\\
 \code{Win32\_SystemDriver} with any configuration property (or \code{*}) & 333 rows; \code{vwifibus} omitted (binary absent); \code{SELECT Name} returns 334\\
 \code{MSFT\_ScheduledTask} at $k=100$ & 3 of 200 queries one task short as the count changed from 135 to 136\\\bottomrule
