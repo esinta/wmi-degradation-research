@@ -59,6 +59,12 @@ func (Native) RestartWinmgmt() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("dependents: %w", err)
 	}
+	for _, d := range deps {
+		if strings.EqualFold(d, "EsintaEndpoints") {
+			// Project rule: the probe never touches the Esinta service.
+			return "", fmt.Errorf("EsintaEndpoints is running and depends on Winmgmt: not restarting")
+		}
+	}
 	var rep []string
 	t0 := time.Now()
 	for _, d := range deps {

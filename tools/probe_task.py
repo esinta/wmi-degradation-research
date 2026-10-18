@@ -1,7 +1,13 @@
 """Create and start a one-shot probe2 task on a lab host, as LocalSystem.
 
     python tools/probe_task.py <target> <name> -- <probe2 args...>
-    python tools/probe_task.py win2 H -- run -arm H -k 20 -duration 72h -preflight C:\\probe\\...\\preflight.json
+    python tools/probe_task.py win2 H -- run -arm H -k 20 -duration 72h -preflight C:/probe/.../preflight.json
+    python tools/probe_task.py win2 chain -- run -arm A ... --- run -arm B ...
+
+`---` separates probe2 invocations that run one after another in the same
+task, with a 5 min settle between them (`--settle <s>` first to change it,
+0 to skip); each step gets its own log, <name>-<utc>-<i>.log. A failed step
+does not stop the chain. Write paths with forward slashes.
 
 Why not plain `schtasks /Create /TR`: those tasks run at priority 7 (below
 normal) and are killed after the default 72 h ExecutionTimeLimit. This task
@@ -54,6 +60,9 @@ def main() -> None:
     if len(sys.argv) < 4 or sys.argv[3] != "--":
         sys.exit(__doc__)
     target, name, args = sys.argv[1], sys.argv[2], sys.argv[4:]
+    settle = 300
+    if args[:1] == ["--settle"]:
+        settle, args = int(args[1]), args[2:]
     if not name.replace("-", "").replace("_", "").isalnum():
         sys.exit("name must be alphanumeric with - or _")
     if any(c in a for a in args for c in '%&|<>^"'):
@@ -61,8 +70,24 @@ def main() -> None:
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     task = "probe2-" + name
     cmd_path = rf"C:\probe\tasks\{name}.cmd"
-    log_path = rf"C:\probe\logs\{name}-{stamp}.log"
-    wrapper = "@echo off\r\nC:\\probe\\probe2.exe " + " ".join(args) + f" > {log_path} 2>&1\r\n"
+    steps, cur = [], []
+    for a in args:
+        if a == "---":
+            steps.append(cur)
+            cur = []
+        else:
+            cur.append(a)
+    steps.append(cur)
+    if any(not st for st in steps):
+        sys.exit("empty step in chain")
+    wrapper, logs = "@echo off\r\n", []
+    for i, st in enumerate(steps):
+        suffix = "" if len(steps) == 1 else f"-{i + 1}"
+        log_path = rf"C:\probe\logs\{name}-{stamp}{suffix}.log"
+        logs.append(log_path)
+        if i > 0 and settle > 0:
+            wrapper += f"powershell -NoProfile -Command Start-Sleep -Seconds {settle}\r\n"
+        wrapper += "C:\\probe\\probe2.exe " + " ".join(st) + f" > {log_path} 2>&1\r\n"
     with tempfile.TemporaryDirectory() as d:
         with open(os.path.join(d, "t.cmd"), "w", newline="") as f:
             f.write(wrapper)
@@ -73,7 +98,7 @@ def main() -> None:
         lab(target, "put", os.path.join(d, "t.xml"), rf"C:/probe/tasks/{name}.xml")
     lab(target, "run", rf"schtasks /Create /F /TN {task} /XML C:\probe\tasks\{name}.xml")
     lab(target, "run", rf"schtasks /Run /TN {task}")
-    print(f"started {task} at {stamp}; log {log_path}")
+    print(f"started {task} at {stamp}; {len(steps)} step(s); logs " + ", ".join(logs))
 
 
 if __name__ == "__main__":
