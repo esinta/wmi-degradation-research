@@ -6,8 +6,12 @@ For each fault (provider-host kill, Winmgmt restart) in each run:
   errors         non-ok queries from the fault to the next fault / arm end,
                  excluding pre-flight's deterministic-error keys and calls
                  cut by arm end
-  recovered_s    seconds from the fault until every namespace has answered
-                 ok again ("never" if one did not before the window ended)
+  recovered_s    seconds from the fault until every namespace that failed has
+                 answered ok after its first error ("never" if one did not
+                 before the window ended; 0 if nothing failed)
+  p99_pre_ms / p99_30s_ms
+                 latency p99 in the 5 minutes before the fault and the
+                 30 s after it (the cost of a transparent provider reload)
   errors_after   errors after that recovery point (relapses)
   codes          effective error codes in the window, most common first
   reconnects     connect_ok events in the window, by retire reason
@@ -51,18 +55,26 @@ def analyse(d, deterministic, baseline):
     for name, t0, t1 in wins:
         w = q[(q["ts_start"] >= t0) & (q["ts_start"] < t1)]
         err = w[w["status"] != "ok"]
-        # Recovery: every namespace that was queried in the window answered ok.
+        # Recovery: each namespace that failed answered ok after its first
+        # error. Calls already in flight when the fault lands can still
+        # succeed, so an ok before the first error does not count.
         firsts = {}
         for ns, g in w.groupby("namespace"):
-            ok = g[g["status"] == "ok"]
+            e = g[g["status"] != "ok"]["ts_start"].min()
+            if pd.isna(e):
+                continue
+            ok = g[(g["status"] == "ok") & (g["ts_start"] > e)]
             firsts[ns] = (ok["ts_start"].min() - t0).total_seconds() if len(ok) else None
         never = [ns for ns, v in firsts.items() if v is None]
-        rec = None if never else max(firsts.values())
+        rec = None if never else max(firsts.values(), default=0.0)
         after = err[err["ts_start"] > t0 + pd.Timedelta(seconds=rec)] if rec is not None else err.iloc[0:0]
         codes = err["eff_code"].replace("", "(none)").value_counts().head(4).to_dict()
         c = conns[(conns["ts"] >= t0) & (conns["ts"] < t1)] if not conns.empty else conns
         recon = c[c["event"] == "connect_ok"]["reason"].value_counts().to_dict() if not c.empty else {}
         fails = int((c["event"] == "connect_fail").sum()) if not c.empty else 0
+        okq = q[q["status"] == "ok"]
+        pre5 = okq[(okq["ts_start"] >= t0 - pd.Timedelta(minutes=5)) & (okq["ts_start"] < t0)]["latency_ms"]
+        post = w[w["ts_start"] < t0 + pd.Timedelta(seconds=30)]["latency_ms"]
         rows.append({**base, "fault": name, "fault_at_min": round((t0 - start).total_seconds() / 60, 1),
                      "window_min": round((t1 - t0).total_seconds() / 60, 1), "queries": len(w), "errors": len(err),
                      "error_pct": round(100 * len(err) / len(w), 2) if len(w) else None,
@@ -70,6 +82,9 @@ def analyse(d, deterministic, baseline):
                      "never_recovered_ns": ";".join(never), "errors_after_recovery": len(after),
                      "codes": json.dumps(codes), "reconnects": json.dumps(recon), "connect_fails": fails,
                      "silent": int((w["silent_net"] > 0).sum()),
+                     "p99_pre_ms": round(pre5.quantile(0.99), 1) if len(pre5) else None,
+                     "p99_30s_ms": round(post.quantile(0.99), 1) if len(post) else None,
+                     "max_30s_ms": round(post.max(), 1) if len(post) else None,
                      "fault_detail": "; ".join(r.events[r.events["kind"].str.startswith("fault_" + name)]["detail"].astype(str))})
     return rows
 
