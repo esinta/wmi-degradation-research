@@ -12,11 +12,10 @@
 \newcommand{\STbLeak}{140--300}
 \newcommand{\STbSummary}{at $k=10$ for 1\,h (3{,}180 queries and 31{,}650 array reads in the 30-minute measurement window) the client's private bytes grew 8.5\,MB/h, i.e.\ 141.5\,B per array read (95\% CI [139.3, 143.6]), against 0.06\,B for the correct client (Table~\ref{tab:st1}); the probe's own ledger flagged 780 unreleased values. The leak grows with reads, not with connection age, and Agent A's data above show that recycling does not release it.}
 % E-fault: results/win10-lab/E{0,1,2,3}-fault/, analysis/efault.py (deterministic keys excluded).
-\newcommand{\EthreeErr}{\textbf{[E3]}}
-\newcommand{\EthreeRec}{\textbf{[E3]}}
-\newcommand{\EthreeRecon}{\textbf{[E3]}}
-\newcommand{\EthreeText}{\textbf{[E3 text pending.]}}
-\newcommand{\EfaultHeadline}{a restart of the WMI service breaks every existing connection permanently; reconnecting on the error restored service in 6\,s, a 1-hour timer after 30\,min, and a replica of Agent A's pool \EthreeRec{}, because its health check does not recognise the error.}
+\newcommand{\EthreeErr}{59{,}995}
+\newcommand{\EthreeRec}{none in 60 min}
+\newcommand{\EthreeText}{Agent A's pool behaved exactly like no refresh (59{,}995 errors, no recycle): \hr{RPC\_S\_SERVER\_UNAVAILABLE} is not an outer code its health check treats as unhealthy, and at arm end its connections were 1.5\,h of 6\,h old with at most 21{,}000 of 50{,}000 queries. By its rules the first recycle would come from the query budget at about 214\,min ($k=100$) or the 6\,h age limit (production rate); we did not run that long. The refresh mechanism did not fire on the one fault that needed it.}
+\newcommand{\EfaultHeadline}{a restart of the WMI service breaks every existing connection permanently; reconnecting on the error restored service within 6\,s, a 1-hour timer after 30\,min, and a replica of Agent A's pool not within the hour, because its health check does not recognise the error.}
 % H (7 days, k=100): running.
 \newcommand{\HNote}{A 7-day run at $k=100$ (about 300 production-days of queries per connection) is in progress and will replace this section's age bound.}
 \newcommand{\HAgeNote}{; the 7-day run is in progress}
