@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -402,6 +403,71 @@ func TestFaultsAreInjectedAndLogged(t *testing.T) {
 	b, _ := os.ReadFile(filepath.Join(cfg.Dir(), "meta.json"))
 	if !strings.Contains(string(b), "restart_winmgmt@500ms") {
 		t.Fatalf("meta has no faults: %s", b)
+	}
+}
+
+// Mid-query kill: the kill waits for a Win32_Process call that has been in
+// flight long enough, names it by seq, and that call has a row.
+func TestInflightKillTargetsARunningCall(t *testing.T) {
+	cfg := baseConfig(t, "E-midq")
+	cfg.Duration = 1500 * time.Millisecond
+	cfg.FaultKillHost, cfg.FaultKillInflight = 200*time.Millisecond, 5*time.Millisecond
+	cfg.Validate()
+	var conns []*fakeConn
+	var mu sync.Mutex
+	e := env(40*time.Millisecond, &conns, &mu)
+	f := &fakeFault{}
+	e.Fault = f
+	if _, err := Run(context.Background(), cfg, e); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.killed) != 1 || f.killed[0] != 777 {
+		t.Fatalf("killed %v", f.killed)
+	}
+	var start, done string
+	for _, ev := range readAll(t, cfg.Dir(), "events") {
+		switch ev[1] {
+		case "fault_kill_host_start":
+			start = ev[5]
+		case "fault_kill_host":
+			done = ev[5]
+		}
+	}
+	m := regexp.MustCompile(`inflight seq=(\d+) key=(proc_\w+) running ([\d.]+) ms`).FindStringSubmatch(start)
+	if m == nil {
+		t.Fatalf("start detail %q", start)
+	}
+	if ms, _ := strconv.ParseFloat(m[3], 64); ms < 5 {
+		t.Fatalf("killed a call only %.3f ms old", ms)
+	}
+	if !strings.Contains(done, "seq="+m[1]+" still in flight after kill=true") {
+		t.Fatalf("result detail %q", done)
+	}
+	found := false
+	for _, q := range readAll(t, cfg.Dir(), "queries") {
+		if q[2] == m[1] && q[9] == m[2] {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no queries row for seq %s key %s", m[1], m[2])
+	}
+}
+
+func TestRepeatedKillsNeedAnInterval(t *testing.T) {
+	cfg := baseConfig(t, "E-midq")
+	cfg.Duration = 10 * time.Minute
+	cfg.FaultKillHost, cfg.FaultKillRepeat, cfg.FaultKillEvery = time.Minute, 3, 10*time.Second
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("accepted kills 10 s apart")
+	}
+	cfg.FaultKillEvery = 5 * time.Minute // last kill at 11 min of 10
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("accepted a kill after arm end")
+	}
+	cfg.FaultKillEvery = 2 * time.Minute
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
 	}
 }
 

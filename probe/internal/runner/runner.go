@@ -68,7 +68,20 @@ type Config struct {
 	FaultKillHost       time.Duration // kill the WmiPrvSE serving FaultClass
 	FaultRestartWinmgmt time.Duration // restart Winmgmt and its running dependents
 	FaultClass          string        // default Win32_Process
+	// Mid-query kills: when FaultKillInflight > 0, each host kill waits (up
+	// to inflightWait) for a FaultClass call that has been in flight this
+	// long, then kills; FaultKillRepeat kills, FaultKillEvery apart.
+	FaultKillInflight time.Duration
+	FaultKillRepeat   int
+	FaultKillEvery    time.Duration
 }
+
+// inflightWait bounds how long a mid-query kill waits for a matching call.
+const inflightWait = time.Minute
+
+// minKillEvery leaves the sampler (10 s) time to attribute the replacement
+// host before the next kill.
+const minKillEvery = 30 * time.Second
 
 // Conn is what the runner needs from a connection (wmi.Conn; fakes in tests).
 type Conn interface {
@@ -191,6 +204,17 @@ func (c *Config) Validate() error {
 	if c.FaultKillHost > 0 && c.FaultClass == "" {
 		c.FaultClass = "Win32_Process"
 	}
+	if c.FaultKillRepeat > 1 {
+		if c.FaultKillHost == 0 || c.FaultKillEvery < minKillEvery {
+			return fmt.Errorf("repeated kills need -fault-kill-host and -fault-kill-every >= %s", minKillEvery)
+		}
+		if c.FaultKillHost+time.Duration(c.FaultKillRepeat-1)*c.FaultKillEvery >= c.Duration {
+			return errors.New("fault offsets must be inside the arm")
+		}
+	}
+	if c.FaultKillInflight < 0 {
+		return errors.New("negative -fault-kill-inflight")
+	}
 	return nil
 }
 
@@ -216,7 +240,16 @@ type slot struct {
 	failStreak int
 	nextDial   time.Time
 	hungWarned atomic.Bool
-	connMu     sync.Mutex // guards conn for the sampler's hang check
+	connMu     sync.Mutex               // guards conn for the sampler's hang check
+	running    atomic.Pointer[inflight] // the call in progress, for mid-query kills
+}
+
+// inflight is one query call in progress on a slot.
+type inflight struct {
+	class string
+	key   string
+	seq   uint64
+	start time.Time
 }
 
 func (s *slot) current() Conn {
@@ -340,7 +373,14 @@ func Run(ctx context.Context, cfg Config, env Env) (Summary, error) {
 		r.meta.ReleaseTest = cfg.ReleaseTest.String()
 	}
 	if cfg.FaultKillHost > 0 {
-		r.meta.Faults = append(r.meta.Faults, fmt.Sprintf("kill_host:%s@%s", cfg.FaultClass, cfg.FaultKillHost))
+		f := fmt.Sprintf("kill_host:%s@%s", cfg.FaultClass, cfg.FaultKillHost)
+		if cfg.FaultKillRepeat > 1 {
+			f += fmt.Sprintf(" x%d every %s", cfg.FaultKillRepeat, cfg.FaultKillEvery)
+		}
+		if cfg.FaultKillInflight > 0 {
+			f += fmt.Sprintf(" inflight>=%s", cfg.FaultKillInflight)
+		}
+		r.meta.Faults = append(r.meta.Faults, f)
 	}
 	if cfg.FaultRestartWinmgmt > 0 {
 		r.meta.Faults = append(r.meta.Faults, fmt.Sprintf("restart_winmgmt@%s", cfg.FaultRestartWinmgmt))
@@ -458,7 +498,10 @@ func (r *Runner) injectFaults(ctx context.Context, start time.Time) {
 	}
 	var steps []step
 	if r.cfg.FaultKillHost > 0 {
-		steps = append(steps, step{r.cfg.FaultKillHost, "kill_host"})
+		n := max(r.cfg.FaultKillRepeat, 1)
+		for i := 0; i < n; i++ {
+			steps = append(steps, step{r.cfg.FaultKillHost + time.Duration(i)*r.cfg.FaultKillEvery, "kill_host"})
+		}
 	}
 	if r.cfg.FaultRestartWinmgmt > 0 {
 		steps = append(steps, step{r.cfg.FaultRestartWinmgmt, "restart_winmgmt"})
@@ -472,15 +515,34 @@ func (r *Runner) injectFaults(ctx context.Context, start time.Time) {
 		}
 		switch st.kind {
 		case "kill_host":
+			var hit *inflight
+			var hitSlot *slot
+			if r.cfg.FaultKillInflight > 0 {
+				hit, hitSlot = r.waitInflight(ctx, r.cfg.FaultClass, r.cfg.FaultKillInflight)
+				if hit == nil {
+					r.event("fault_skipped", "", "", 0, fmt.Sprintf("kill_host: no %s call in flight for %s within %s", r.cfg.FaultClass, r.cfg.FaultKillInflight, inflightWait))
+					continue
+				}
+			}
 			pid := (*r.classHost.Load())[r.cfg.FaultClass]
 			if pid == 0 {
 				r.event("fault_skipped", "", "", 0, "kill_host: no WmiPrvSE attributed to "+r.cfg.FaultClass)
 				continue
 			}
-			r.event("fault_kill_host_start", "", "", pid, r.cfg.FaultClass)
+			startDetail := r.cfg.FaultClass
+			if hit != nil {
+				startDetail += fmt.Sprintf("; inflight seq=%d key=%s running %.3f ms", hit.seq, hit.key, float64(time.Since(hit.start).Microseconds())/1000)
+			}
+			r.event("fault_kill_host_start", "", "", pid, startDetail)
 			detail := "ok"
 			if err := r.env.Fault.KillHost(pid); err != nil {
 				detail = "error: " + err.Error()
+			}
+			if hit != nil {
+				// Whether the targeted call was still running when the kill
+				// returned; its own outcome is its row in queries (by seq).
+				still := hitSlot.running.Load() == hit
+				detail += fmt.Sprintf("; seq=%d still in flight after kill=%t (%.3f ms after call start)", hit.seq, still, float64(time.Since(hit.start).Microseconds())/1000)
 			}
 			r.event("fault_kill_host", "", "", pid, detail)
 		case "restart_winmgmt":
@@ -492,6 +554,23 @@ func (r *Runner) injectFaults(ctx context.Context, start time.Time) {
 			r.event("fault_restart_winmgmt", "", "", 0, rep)
 		}
 	}
+}
+
+// waitInflight polls the slots for a call on class that has been running at
+// least minAge, and returns it (nil after inflightWait or arm end).
+func (r *Runner) waitInflight(ctx context.Context, class string, minAge time.Duration) (*inflight, *slot) {
+	deadline := time.Now().Add(inflightWait)
+	for time.Now().Before(deadline) && ctx.Err() == nil {
+		for _, slots := range r.byNS {
+			for _, s := range slots {
+				if f := s.running.Load(); f != nil && f.class == class && time.Since(f.start) >= minAge {
+					return f, s
+				}
+			}
+		}
+		time.Sleep(200 * time.Microsecond)
+	}
+	return nil, nil
 }
 
 // releaseWait bounds the shutdown wait for connection releases (a release
@@ -607,7 +686,9 @@ func (r *Runner) execute(ctx context.Context, s *slot, j job) {
 		pre = r.tc.Before(q, pid)
 	}
 	abandon := r.cfg.Strategy.Abandons()
+	s.running.Store(&inflight{class: q.Class, key: q.Key, seq: seq, start: time.Now()})
 	res := c.Query(ctx, wql, r.cfg.Deadline, abandon, func(late wmi.Result) { r.writeLate(seq, late) })
+	s.running.Store(nil)
 	s.lastUsed = now
 	switch res.Status {
 	case wmi.StatusAbandoned:

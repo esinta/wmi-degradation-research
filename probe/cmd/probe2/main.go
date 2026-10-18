@@ -160,6 +160,9 @@ func cmdRun(ctx context.Context, args []string) error {
 	faultKill := fs.Duration("fault-kill-host", 0, "E-fault: kill the WmiPrvSE serving -fault-class this long after arm start (0 = no)")
 	faultClass := fs.String("fault-class", "Win32_Process", "E-fault: class whose provider host -fault-kill-host kills")
 	faultWinmgmt := fs.Duration("fault-restart-winmgmt", 0, "E-fault: restart Winmgmt (and its running dependents) this long after arm start (0 = no)")
+	faultInflight := fs.Duration("fault-kill-inflight", 0, "E-fault: each host kill waits for a -fault-class call in flight at least this long (0 = kill at the offset regardless)")
+	faultRepeat := fs.Int("fault-kill-repeat", 1, "E-fault: number of host kills")
+	faultEvery := fs.Duration("fault-kill-every", 0, "E-fault: interval between repeated host kills (>= 30s)")
 	_ = fs.Parse(args)
 
 	if *dur <= 0 || *arm == "" {
@@ -222,6 +225,7 @@ func cmdRun(ctx context.Context, args []string) error {
 		SampleInterval: *sample, HangWarn: *hangWarn, HangAbort: *hangAbort, ReleaseTest: *release, Truth: *truthOn,
 		Attribution: attribution, Limits: lim, Commit: commit, Priority: priority, Args: argv,
 		FaultKillHost: *faultKill, FaultRestartWinmgmt: *faultWinmgmt, FaultClass: *faultClass,
+		FaultKillInflight: *faultInflight, FaultKillRepeat: *faultRepeat, FaultKillEvery: *faultEvery,
 	}
 	if err := cfg.Validate(); err != nil {
 		return err
