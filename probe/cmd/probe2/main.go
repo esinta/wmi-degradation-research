@@ -157,6 +157,9 @@ func cmdRun(ctx context.Context, args []string) error {
 	maxInduced := fs.Float64("max-induced-cpu", abort.Defaults().MaxInducedCPUPct, "abort when probe-induced CPU stays above this % for 10 min")
 	allowForeign := fs.Bool("allow-foreign-wmi", false, "run even if WMI-heavy software (e.g. the Esinta agent) is running; recorded in meta")
 	memLimit := fs.Int64("gomemlimit-mb", 256, "Go heap soft limit (MB)")
+	faultKill := fs.Duration("fault-kill-host", 0, "E-fault: kill the WmiPrvSE serving -fault-class this long after arm start (0 = no)")
+	faultClass := fs.String("fault-class", "Win32_Process", "E-fault: class whose provider host -fault-kill-host kills")
+	faultWinmgmt := fs.Duration("fault-restart-winmgmt", 0, "E-fault: restart Winmgmt (and its running dependents) this long after arm start (0 = no)")
 	_ = fs.Parse(args)
 
 	if *dur <= 0 || *arm == "" {
@@ -218,6 +221,7 @@ func cmdRun(ctx context.Context, args []string) error {
 		Mix: *mix, Queries: qs, K: *k, Duration: *dur, Seed: *seed, Strategy: st, Deadline: *deadline, Cimv2Conns: *cimv2,
 		SampleInterval: *sample, HangWarn: *hangWarn, HangAbort: *hangAbort, ReleaseTest: *release, Truth: *truthOn,
 		Attribution: attribution, Limits: lim, Commit: commit, Priority: priority, Args: argv,
+		FaultKillHost: *faultKill, FaultRestartWinmgmt: *faultWinmgmt, FaultClass: *faultClass,
 	}
 	if err := cfg.Validate(); err != nil {
 		return err

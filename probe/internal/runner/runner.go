@@ -24,6 +24,7 @@ import (
 	"wmiresearch/probe/internal/abort"
 	"wmiresearch/probe/internal/catalog"
 	"wmiresearch/probe/internal/etw"
+	"wmiresearch/probe/internal/fault"
 	"wmiresearch/probe/internal/out"
 	"wmiresearch/probe/internal/sampler"
 	"wmiresearch/probe/internal/sched"
@@ -62,6 +63,11 @@ type Config struct {
 	Commit   string
 	Priority string // process priority class as started (and "->normal" if raised)
 	Args     []string
+
+	// E-fault (design §4.1): offsets from arm start; 0 = no such fault.
+	FaultKillHost       time.Duration // kill the WmiPrvSE serving FaultClass
+	FaultRestartWinmgmt time.Duration // restart Winmgmt and its running dependents
+	FaultClass          string        // default Win32_Process
 }
 
 // Conn is what the runner needs from a connection (wmi.Conn; fakes in tests).
@@ -85,6 +91,11 @@ type Env struct {
 	// meta.json ("on 1m0s every 15m0s", or why it is unavailable).
 	Meter     interface{ Drain() etw.Drained }
 	MeterDesc string
+	// Fault injects E-fault faults (nil = none configured).
+	Fault interface {
+		KillHost(pid uint32) error
+		RestartWinmgmt() (string, error)
+	}
 }
 
 // NativeEnv is the production environment.
@@ -99,6 +110,7 @@ func NativeEnv(diskPath string, attribution map[string]string) Env {
 			return c, ci, nil
 		},
 		Truth:   truth.Native{},
+		Fault:   fault.Native{},
 		Sampler: sampler.New(diskPath, attribution),
 		OSInfo:  sysinfo.GetOSInfo(runtime.NumCPU()),
 	}
@@ -139,6 +151,7 @@ type Meta struct {
 	EndUTC        *time.Time        `json:"end_utc,omitempty"`
 	EndReason     string            `json:"end_reason,omitempty"`
 	Totals        map[string]uint64 `json:"totals,omitempty"`
+	Faults        []string          `json:"faults,omitempty"` // "kill_host:<class>@<offset>", "restart_winmgmt@<offset>"
 }
 
 // Validate checks a config before anything starts.
@@ -169,6 +182,14 @@ func (c *Config) Validate() error {
 	}
 	if len(c.Queries) == 0 {
 		return errors.New("empty catalog")
+	}
+	for _, f := range []time.Duration{c.FaultKillHost, c.FaultRestartWinmgmt} {
+		if f < 0 || f >= c.Duration {
+			return errors.New("fault offsets must be inside the arm")
+		}
+	}
+	if c.FaultKillHost > 0 && c.FaultClass == "" {
+		c.FaultClass = "Win32_Process"
 	}
 	return nil
 }
@@ -318,6 +339,16 @@ func Run(ctx context.Context, cfg Config, env Env) (Summary, error) {
 	if cfg.ReleaseTest > 0 {
 		r.meta.ReleaseTest = cfg.ReleaseTest.String()
 	}
+	if cfg.FaultKillHost > 0 {
+		r.meta.Faults = append(r.meta.Faults, fmt.Sprintf("kill_host:%s@%s", cfg.FaultClass, cfg.FaultKillHost))
+	}
+	if cfg.FaultRestartWinmgmt > 0 {
+		r.meta.Faults = append(r.meta.Faults, fmt.Sprintf("restart_winmgmt@%s", cfg.FaultRestartWinmgmt))
+	}
+	if len(r.meta.Faults) > 0 && env.Fault == nil {
+		ws.Close()
+		return Summary{}, errors.New("faults configured but the environment has no injector")
+	}
 	for _, s := range r.slots {
 		r.meta.Slots = append(r.meta.Slots, s.name)
 	}
@@ -346,6 +377,11 @@ func Run(ctx context.Context, cfg Config, env Env) (Summary, error) {
 		}(s)
 	}
 	r.event("arm_start", "", "", 0, fmt.Sprintf("k=%g strategy=%s slots=%d", cfg.K, cfg.Strategy.Kind, len(r.slots)))
+	faultsDone := make(chan struct{})
+	go func() {
+		defer close(faultsDone)
+		r.injectFaults(runCtx, time.Now())
+	}()
 
 	timer := time.NewTimer(cfg.Duration)
 	dispDone := make(chan struct{})
@@ -366,6 +402,7 @@ func Run(ctx context.Context, cfg Config, env Env) (Summary, error) {
 	timer.Stop()
 	cancel()
 	<-dispDone
+	<-faultsDone
 	for _, s := range r.slots {
 		close(s.queue)
 	}
@@ -409,6 +446,52 @@ func Run(ctx context.Context, cfg Config, env Env) (Summary, error) {
 		sum.MeanHostCPU, sum.MeanInducedCPU = r.cpuHost/float64(r.cpuN), r.cpuInduced/float64(r.cpuN)
 	}
 	return sum, errors.Join(r.writeErr, merr, werr)
+}
+
+// injectFaults runs the configured E-fault faults at their offsets from
+// the arm start. Each fault writes a *_start event and a result event, so
+// recovery is measured from the moment the fault was applied.
+func (r *Runner) injectFaults(ctx context.Context, start time.Time) {
+	type step struct {
+		at   time.Duration
+		kind string
+	}
+	var steps []step
+	if r.cfg.FaultKillHost > 0 {
+		steps = append(steps, step{r.cfg.FaultKillHost, "kill_host"})
+	}
+	if r.cfg.FaultRestartWinmgmt > 0 {
+		steps = append(steps, step{r.cfg.FaultRestartWinmgmt, "restart_winmgmt"})
+	}
+	sort.Slice(steps, func(i, j int) bool { return steps[i].at < steps[j].at })
+	for _, st := range steps {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Until(start.Add(st.at))):
+		}
+		switch st.kind {
+		case "kill_host":
+			pid := (*r.classHost.Load())[r.cfg.FaultClass]
+			if pid == 0 {
+				r.event("fault_skipped", "", "", 0, "kill_host: no WmiPrvSE attributed to "+r.cfg.FaultClass)
+				continue
+			}
+			r.event("fault_kill_host_start", "", "", pid, r.cfg.FaultClass)
+			detail := "ok"
+			if err := r.env.Fault.KillHost(pid); err != nil {
+				detail = "error: " + err.Error()
+			}
+			r.event("fault_kill_host", "", "", pid, detail)
+		case "restart_winmgmt":
+			r.event("fault_restart_winmgmt_start", "", "", 0, "")
+			rep, err := r.env.Fault.RestartWinmgmt()
+			if err != nil {
+				rep += "; error: " + err.Error()
+			}
+			r.event("fault_restart_winmgmt", "", "", 0, rep)
+		}
+	}
 }
 
 // releaseWait bounds the shutdown wait for connection releases (a release

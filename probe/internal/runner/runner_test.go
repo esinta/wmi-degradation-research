@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -349,5 +350,67 @@ func TestCallsCutByArmEndAreShutdown(t *testing.T) {
 	}
 	if st["shutdown"] == 0 || st["abandoned"] != 0 {
 		t.Fatalf("statuses %v: want shutdown rows and no abandoned", st)
+	}
+}
+
+type fakeFault struct {
+	mu      sync.Mutex
+	killed  []uint32
+	restart int
+}
+
+func (f *fakeFault) KillHost(pid uint32) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.killed = append(f.killed, pid)
+	return nil
+}
+
+func (f *fakeFault) RestartWinmgmt() (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.restart++
+	return "Winmgmt stopped after 1ms; Winmgmt running after 1ms", nil
+}
+
+// E-fault: each fault fires once at its offset, on the host attributed to
+// the class, with start and result events.
+func TestFaultsAreInjectedAndLogged(t *testing.T) {
+	cfg := baseConfig(t, "E0-fault")
+	cfg.Duration = 900 * time.Millisecond
+	cfg.FaultKillHost, cfg.FaultRestartWinmgmt, cfg.FaultClass = 300*time.Millisecond, 500*time.Millisecond, "Win32_Process"
+	var conns []*fakeConn
+	var mu sync.Mutex
+	e := env(0, &conns, &mu)
+	f := &fakeFault{}
+	e.Fault = f
+	if _, err := Run(context.Background(), cfg, e); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.killed) != 1 || f.killed[0] != 777 || f.restart != 1 {
+		t.Fatalf("killed %v restarts %d", f.killed, f.restart)
+	}
+	kinds := map[string]int{}
+	for _, ev := range readAll(t, cfg.Dir(), "events") {
+		kinds[ev[1]]++
+	}
+	for _, k := range []string{"fault_kill_host_start", "fault_kill_host", "fault_restart_winmgmt_start", "fault_restart_winmgmt"} {
+		if kinds[k] != 1 {
+			t.Fatalf("event %s x%d: %v", k, kinds[k], kinds)
+		}
+	}
+	b, _ := os.ReadFile(filepath.Join(cfg.Dir(), "meta.json"))
+	if !strings.Contains(string(b), "restart_winmgmt@500ms") {
+		t.Fatalf("meta has no faults: %s", b)
+	}
+}
+
+func TestFaultsNeedAnInjector(t *testing.T) {
+	cfg := baseConfig(t, "E0-fault")
+	cfg.FaultRestartWinmgmt = 100 * time.Millisecond
+	var conns []*fakeConn
+	var mu sync.Mutex
+	if _, err := Run(context.Background(), cfg, env(0, &conns, &mu)); err == nil {
+		t.Fatal("ran faults without an injector")
 	}
 }
