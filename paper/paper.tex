@@ -4,6 +4,7 @@
 \usepackage[margin=0.75in,columnsep=0.3in]{geometry}
 \usepackage{array,booktabs,graphicx,microtype,xcolor,url,amsmath}
 \usepackage[hidelinks]{hyperref}
+\urlstyle{same}
 \usepackage{listings}
 \lstset{basicstyle=\ttfamily\footnotesize,columns=fullflexible,frame=none,numbers=left,numberstyle=\tiny,xleftmargin=1.5em,firstnumber=auto}
 \newcommand{\code}[1]{\texttt{\small #1}}
@@ -14,6 +15,7 @@
 \author{Author Name\\ \normalsize Affiliation}
 \date{}
 
+\raggedbottom
 \begin{document}
 \maketitle
 
@@ -56,7 +58,7 @@ Enumeration uses a strict loop: \hr{S\_OK} yields an item, \hr{S\_FALSE} with no
 A query that exceeds its deadline is abandoned on the caller's side and its row is written when WMI eventually answers.
 
 \paragraph{Workload.}
-The catalogue reproduces Agent A's 23 production queries verbatim across 8 namespaces (22 queries in 7 namespaces exist on our host; BitLocker's namespace is absent) (processes, services, drivers, event logs, firewall rules and filters, Defender status, WMI subscriptions, scheduled tasks, Device Guard, TPM), each at its production rate: 636 queries/h in total on our host.
+The catalogue reproduces Agent A's 23 production queries verbatim (processes, services, drivers, event logs, firewall, Defender, WMI subscriptions, scheduled tasks, Device Guard, TPM), each at its production rate; 22 queries in 7 namespaces exist on our host (BitLocker's is absent), 636 queries/h in total.
 An acceleration factor $k$ multiplies every rate.
 A pre-flight calibration on the test host (10-minute steps, $k\in\{1,5,10,20,50,100\}$) gave probe-induced CPU (probe + all provider hosts + Winmgmt) of 0.4, 1.6, 3.3, 6.3, 15.6 and 29.9\% with no dropped queries; we use $k_H=100$, the top of the ramp, below a 40\% budget.
 
@@ -119,7 +121,6 @@ Our positive control re-enables the bug in the probe: \STbSummary{}
 Agent A called the apartment-threaded scripting objects from multi-threaded-apartment goroutines, so COM marshalled every call into a single host STA (confirmed in debugger stacks).
 Moving each connection to its own STA cut CPU per collection cycle about 3$\times$ (process poll 1.31--1.40\,s to 0.42--0.44\,s; firewall rules 8.5\,s to 2.8\,s) and steady-state CPU on a busy 16-CPU laptop from 28.3\% to 3.5--3.9\% of a core, eliminating 1{,}490 abandoned calls in 69\,h ($\approx$21/h).
 On a quiet 2-vCPU VM the same bug cost 5.0\% vs 0.9\% and caused no abandoned calls: the symptom scales with host load, which makes it look like ageing on busy machines.
-These production numbers are before/after measurements of one code change, not a controlled experiment, and we report them as such.
 
 \section{Silent failures}\label{sec:silent}
 \paragraph{A library that swallows errors.}
@@ -148,8 +149,7 @@ Query / class & Observed\\\midrule
 \code{SELECT Name FROM \_\_EventConsumer} & \hr{0x80041017} at \code{Next}, every call\\
 \code{SELECT InstanceID, Program, Package FROM MSFT\_Net\allowbreak{}ApplicationFilter} & \hr{0x80041017} at \code{Next}, every call\\
 \code{\ldots{} FROM MSFT\_ScheduledTaskInfo} & \hr{0x80041010} at \code{Next}, every call\\
-\code{Win32\_SystemDriver} with any configuration property (or \code{*}) & 333 rows; \code{vwifibus} omitted (binary absent); \code{SELECT Name} returns 334\\
-\code{MSFT\_ScheduledTask} at $k=100$ & 3 of 200 queries one task short as the count changed from 135 to 136\\\bottomrule
+\code{Win32\_SystemDriver} with any configuration property (or \code{*}) & 333 rows; \code{vwifibus} omitted (binary absent); \code{SELECT Name} returns 334\\\bottomrule
 \end{tabular}
 \end{table}
 
@@ -160,12 +160,34 @@ No error is returned at any layer; only the comparison with the service control 
 Because the omission is deterministic, we treat it as a per-key truth baseline and count S2 only above it.
 
 \paragraph{Races are not failures.}
-Ground truth has its own error rate.
-In 19{,}716 calibration queries the remaining flags were three scheduled-task counts one short just as the count changed (most likely a task being added) and one process that exited during its query, i.e.\ timing, not WMI.
-Separating these requires bracketing truth before and after each query.
+In 19{,}716 calibration queries the only other flags were three scheduled-task counts one short as the count changed and one process that exited during its query: timing, not WMI, separable only by bracketing truth before and after each query.
 
 \section{Fault recovery and refresh}\label{sec:fault}
-\EfaultSection{}
+If connections do not age, refresh is only worth its cost as recovery from faults.
+We ran four 90-minute arms back to back on the same host ($k=100$, a fresh set of connections each), one per strategy: \emph{none} (E0); \emph{timed}, redial every connection after 1\,h (E1); \emph{adaptive}, retire a connection when the effective error code of a failed call is connection-level, and redial at its next query (E2); and a replica of Agent A's \emph{pool}: recycle at 6\,h, 50{,}000 queries or 5\,min idle, or when the outer \code{HRESULT} maps to access denied, transport failure, ``not available'' or COM not initialised (E3; constants and mapping copied from the agent's source).
+At 15\,min we terminated the \code{WmiPrvSE} host serving \code{Win32\_Process} (and five other providers); at 30\,min we restarted \code{Winmgmt} through the service control manager, with its two running dependent services (1.9\,s in total, Winmgmt down for about 0.4\,s).
+Queries on the three deterministically failing keys are excluded.
+
+\begin{table}[t]\centering\small
+\caption{E-fault, $k=100$, 90\,min per arm (Server 2019). Errors in the 15\,min after the host kill (15{,}000 queries) and the 60\,min after the Winmgmt restart (60{,}000 queries); recovery is the time until every connection that failed has answered again.}\label{tab:efault}
+\begin{tabular}{@{}llrrr@{}}\toprule
+& & Kill & \multicolumn{2}{c}{Winmgmt restart}\\\cmidrule(l){4-5}
+Arm & Strategy & errors & errors & recovery\\\midrule
+E0 & none & 0 & 59{,}995 & none in 60 min\\
+E1 & timed (1\,h) & 0 & 30{,}002 & 1{,}804.5\,s\\
+E2 & adaptive & 0 & 8 & 6.0\,s\\
+E3 & Agent A pool & 0 & \EthreeErr{} & \EthreeRec{}\\\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{A provider-host crash is invisible.}
+In all four arms, killing the provider host caused no failed query: the connection is to \code{Winmgmt}, which had a replacement host with the same providers running 31\,ms later (E0), and the 99th-percentile latency in the following 30\,s was unchanged (225 vs.\ 231\,ms before, E0).
+
+\paragraph{A service restart is permanent.}
+After \code{Winmgmt} restarted, every call on every existing connection failed with \hr{RPC\_S\_SERVER\_UNAVAILABLE} (0x800706BA) and none recovered on its own (E0: 59{,}995 of 60{,}000; the 5 successes were calls issued in the 175\,ms before the service stopped).
+The timed strategy was down until its timer fired, 30 minutes later; an outage of up to one refresh interval is inherent to it.
+The adaptive client lost exactly one query per connection: each of the 9 connections failed once, was retired, redialled in 1--6\,ms, and its next scheduled query succeeded; the 6.0\,s is the query interval of the least-busy namespace at $k=100$ and would be one production polling interval at $k=1$.
+\EthreeText{}
 
 \section{Discussion}\label{sec:discussion}
 \paragraph{Guidance.}
@@ -180,9 +202,9 @@ One host, one OS build, one workload.
 Accelerating the query rate tests count, not age: our longest correct-client connection is 6\,h old\HAgeNote{}.
 The ETW meter ran one minute in fifteen during arms, so foreign activity is sampled (it saw one burst of 6 operations, most likely the Windows Update service).
 Agent A's production numbers come from before/after comparisons of single changes on a few hosts.
-Cross-OS replication (Windows~10, Server 2016/2022) is in progress.
+Cross-OS replication (Windows~10, Server 2016/2022) is future work.
 
-\section{Related work}
+\paragraph{Related work.}
 Microsoft documents the mechanisms we rely on: provider hosting and unloading~\cite{ms-hosting,ms-unload}, quotas~\cite{ms-quota}, enumeration semantics~\cite{ms-next} and COM apartment rules~\cite{ms-sta}.
 We are not aware of published measurements of WMI connection ageing under a verified-correct client, nor of a catalogue of WMI silent failures; we welcome pointers.
 
@@ -191,8 +213,8 @@ Long-lived WMI connections, used correctly, did not degrade in our measurements;
 Refresh is a recovery mechanism, best driven by errors.
 The probe, catalogue and analysis code are available from the authors.
 
-\small
-\begin{thebibliography}{10}
+\footnotesize
+\begin{thebibliography}{10}\setlength{\itemsep}{0pt}
 \bibitem{ms-hosting} Microsoft. \emph{Provider Hosting and Security}. \url{https://learn.microsoft.com/en-us/windows/win32/wmisdk/provider-hosting-and-security}
 \bibitem{ms-unload} Microsoft. \emph{Unloading a Provider}. \url{https://learn.microsoft.com/en-us/windows/win32/wmisdk/unloading-a-provider}
 \bibitem{ms-cachecontrol} Microsoft. \emph{\_\_CacheControl class}. \url{https://learn.microsoft.com/en-us/windows/win32/wmisdk/--cachecontrol}

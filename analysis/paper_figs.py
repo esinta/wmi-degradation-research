@@ -25,7 +25,7 @@ LABELS = {"fw_rules": "MSFT_NetFirewallRule", "drv": "Win32_SystemDriver", "svc"
 def st1(run_dir, out):
     r = load_run(run_dir)
     q = r.queries[r.queries["status"] == "ok"]
-    fig, (a1, a2) = plt.subplots(2, 1, figsize=(3.4, 3.3), gridspec_kw={"height_ratios": [1.3, 1]})
+    fig, (a1, a2) = plt.subplots(2, 1, figsize=(3.4, 2.9), gridspec_kw={"height_ratios": [1.3, 1]})
     for key in KEYS:
         g = q[q["query_key"] == key]
         w = g.groupby(g["ts_start"].dt.floor("15min")).agg(age=("conn_age_s", "median"), lat=("latency_ms", "median"))
@@ -33,7 +33,7 @@ def st1(run_dir, out):
     a1.set_yscale("log")
     a1.set_xlabel("connection age (h)")
     a1.set_ylabel("median latency (ms)")
-    a1.set_ylim(0.08, 600)
+    a1.set_ylim(0.004, 900)
     a1.legend(fontsize=5.5, ncol=2, loc="lower center", bbox_to_anchor=(0.5, 0.0), handlelength=1.2)
     p = r.procs
     t0 = p["ts"].min()
@@ -48,7 +48,7 @@ def st1(run_dir, out):
     a2.plot((c["ts"] - t0).dt.total_seconds() / 3600, c["private_bytes"] / MB, ":", color="gray", label="probe (client)")
     a2.set_xlabel("time since start (h)")
     a2.set_ylabel("private MB")
-    a2.set_ylim(0, 42)
+    a2.set_ylim(0, 46)
     a2.legend(fontsize=5.5, ncol=2, loc="upper center", handlelength=1.2)
     fig.tight_layout(pad=0.3)
     fig.savefig(out)
