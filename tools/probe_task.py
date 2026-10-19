@@ -7,7 +7,8 @@
 `---` separates probe2 invocations that run one after another in the same
 task, with a 5 min settle between them (`--settle <s>` first to change it,
 0 to skip); each step gets its own log, <name>-<utc>-<i>.log. A failed step
-does not stop the chain. Write paths with forward slashes.
+does not stop the chain. Write paths with forward slashes. `--exe <file>`
+(before `--settle`) runs C:\\probe\\<file> instead of probe2.exe.
 
 Why not plain `schtasks /Create /TR`: those tasks run at priority 7 (below
 normal) and are killed after the default 72 h ExecutionTimeLimit. This task
@@ -60,7 +61,11 @@ def main() -> None:
     if len(sys.argv) < 4 or sys.argv[3] != "--":
         sys.exit(__doc__)
     target, name, args = sys.argv[1], sys.argv[2], sys.argv[4:]
-    settle = 300
+    settle, exe = 300, "probe2.exe"
+    if args[:1] == ["--exe"]:
+        exe, args = args[1], args[2:]
+        if not exe.replace("-", "").replace("_", "").replace(".", "").isalnum() or not exe.endswith(".exe"):
+            sys.exit("--exe must be a plain .exe file name under C:\\probe")
     if args[:1] == ["--settle"]:
         settle, args = int(args[1]), args[2:]
     if not name.replace("-", "").replace("_", "").isalnum():
@@ -87,7 +92,7 @@ def main() -> None:
         logs.append(log_path)
         if i > 0 and settle > 0:
             wrapper += f"powershell -NoProfile -Command Start-Sleep -Seconds {settle}\r\n"
-        wrapper += "C:\\probe\\probe2.exe " + " ".join(st) + f" > {log_path} 2>&1\r\n"
+        wrapper += f"C:\\probe\\{exe} " + " ".join(st) + f" > {log_path} 2>&1\r\n"
     with tempfile.TemporaryDirectory() as d:
         with open(os.path.join(d, "t.cmd"), "w", newline="") as f:
             f.write(wrapper)
