@@ -1,21 +1,76 @@
-% Numbers used in paper.tex, each traceable to a run (docs/runs/win2-log.md).
-% ST-1: results/win10-lab/ST-1/20261017T224858Z, analysis/gate.py (window 23:18:58-04:48:58Z).
+% Numbers used in paper.tex (draft v2), each traceable to a run.
+% MB = 10^6 bytes throughout (gate.py prints MiB; converted here, see docs/draft2-pending.md item 5).
+% Host W10 = win10-lab (docs/runs/win2-log.md); host W11 = win11-lab (docs/runs/win11-log.md).
+%
+% \pend{...}: a Windows 11-based value or sentence NOT YET MEASURED, written as the expected
+% replication of the W10 result. Rendered in orange while \drafttrue; with \draftfalse the
+% build stops at the first one left, so a final PDF cannot carry an unfilled placeholder.
+% \authornote{...}: a fact only the authors can supply.
+\newif\ifdraft \drafttrue
+\ifdraft
+  \newcommand{\pend}[1]{\textcolor{orange!85!black}{#1}}
+  \newcommand{\authornote}[1]{\textcolor{red!70!black}{\textbf{[#1]}}}
+\else
+  \newcommand{\pend}[1]{\PackageError{numbers}{unfilled W11 placeholder: #1}{}}
+  \newcommand{\authornote}[1]{\PackageError{numbers}{unfilled author note: #1}{}}
+\fi
+
+% --- Pre-flight -------------------------------------------------------------------------
+% W10: results/win10-lab/preflight/20261017T212444Z (ramp), 20261017T193624Z (idle 60 min).
+% W11: results/win11-lab/preflight/20261018T232450Z (idle 60 min + ramp).
+\newcommand{\WaRamp}{0.4, 1.6, 3.3, 6.3, 15.6 and 29.9\%}
+\newcommand{\WbRamp}{0.6, 2.8, 5.5, 10.7, 27.3 and 53.7\%}
+\newcommand{\WbK}{50}
+\newcommand{\WbRAM}{8\,GB}
+\newcommand{\WaIdle}{3}
+\newcommand{\WbIdle}{15}
+
+% --- ST-1 -------------------------------------------------------------------------------
+% W10: ST-1/20261017T224858Z, gate.py window 23:18:58-04:48:58Z; host_slopes.py -> host-slopes.csv.
 \newcommand{\STaQueries}{381{,}600}
 \newcommand{\STaOk}{360{,}000}
 \newcommand{\STaDetErr}{21{,}600}
-\newcommand{\STaPrivSlope}{0.037}
-\newcommand{\STaPrivCI}{[$-0.007$, 0.082]}
+\newcommand{\STaPrivSlope}{0.039}
+\newcommand{\STaPrivCI}{[$-0.007$, 0.086]}
 \newcommand{\STaPerRead}{0.06}
 \newcommand{\STaPerReadCI}{[$-0.01$, 0.14]}
 \newcommand{\STaArrayReads}{3.48\,M}
-% ST-2: results/win10-lab/buggy-ST-2/20261018T072639Z, analysis/gate.py (window 07:56:39-08:26:39Z).
-\newcommand{\STbLeak}{140--300}
-\newcommand{\STbSummary}{at $k=10$ for 1\,h (3{,}180 queries and 31{,}650 array reads in the 30-minute measurement window) the client's private bytes grew 8.5\,MB/h, i.e.\ 141.5\,B per array read (95\% CI [139.3, 143.6]), against 0.06\,B for the correct client (Table~\ref{tab:st1}); the probe's own ledger flagged 780 unreleased values. The leak grows with reads, not with connection age, and Agent A's data above show that recycling does not release it.}
-% E-fault: results/win10-lab/E{0,1,2,3}-fault/, analysis/efault.py (deterministic keys excluded).
+\newcommand{\STaRelease}{$-0.41$}
+% W11: ST-1/20261019T120300Z, gate.py window 12:33:00-18:03:00Z (gate-st1.json); host-slopes.csv.
+% Queries: 194,400 = 183,598 ok + 10,800 deterministic errors + 2 cut off by the arm's end.
+\newcommand{\STbQueries}{194{,}400}
+\newcommand{\STbOk}{183{,}598}
+\newcommand{\STbDetErr}{10{,}800}
+\newcommand{\STbPrivSlope}{0.230}
+\newcommand{\STbPrivCI}{[0.190, 0.271]}
+\newcommand{\STbPerRead}{0.39}
+\newcommand{\STbPerReadCI}{[0.32, 0.45]}
+\newcommand{\STbArrayReads}{3.28\,M}
+\newcommand{\STbRelease}{$-0.90$}
+
+% --- ST-2 (buggy client, positive control) ----------------------------------------------
+% W10: buggy-ST-2/20261018T072639Z, gate.py window 07:56:39-08:26:39Z; k=10.
+\newcommand{\STtwoLeak}{140}
+% W11: buggy-ST-2 (k=5) and buggy-ST-2-k10 (k=10), battery2 steps 2-3. PENDING.
+\newcommand{\STtwoWbKfive}{\pend{$\approx$141}}
+\newcommand{\STtwoWbKten}{\pend{$\approx$141}}
+
+% --- E-fault ----------------------------------------------------------------------------
+% W10: E{0,1,2,3}-fault, analysis/efault.py; results/efault-summary.csv. k=100.
 \newcommand{\EthreeErr}{59{,}995}
 \newcommand{\EthreeRec}{none in 60 min}
-\newcommand{\EthreeText}{Agent A's pool behaved exactly like no refresh (59{,}995 errors, no recycle): \hr{RPC\_S\_SERVER\_UNAVAILABLE} is not an outer code its health check treats as unhealthy, and at arm end its connections were 1.5\,h of 6\,h old with at most 21{,}000 of 50{,}000 queries. By its rules the first recycle would come from the query budget at about 214\,min ($k=100$) or the 6\,h age limit (production rate); we did not run that long. The refresh mechanism did not fire on the one fault that needed it.}
-\newcommand{\EfaultHeadline}{a restart of the WMI service breaks every existing connection permanently; reconnecting on the error restored service within 6\,s, a 1-hour timer after 30\,min, and a replica of Agent A's pool not within the hour, because its health check does not recognise the error.}
-% H (7 days, k=100): running.
-\newcommand{\HNote}{A 7-day run at $k=100$ (about 300 production-days of queries per connection) is in progress and will replace this section's age bound.}
+% W11: battery2 steps 4-7, k=50. PENDING. Projections from W10 behaviour at W11's rate:
+% 30,600 non-deterministic queries/h; E1 down 30 min; E2 one failure per connection
+% (10 connections, one on an excluded key); E2 recovery = least-busy namespace interval, 2x W10 at half the rate.
+\newcommand{\EbKill}{\pend{0}}
+\newcommand{\EbZeroErr}{\pend{$\approx$30{,}600}}
+\newcommand{\EbOneErr}{\pend{$\approx$15{,}300}}
+\newcommand{\EbOneRec}{\pend{$\approx$1{,}800\,s}}
+\newcommand{\EbTwoErr}{\pend{9}}
+\newcommand{\EbTwoRec}{\pend{$\approx$12\,s}}
+\newcommand{\EbThreeErr}{\pend{$\approx$30{,}600}}
+\newcommand{\EbThreeRec}{\pend{none in 60 min}}
+
+% --- H (7 days, k=100, W10): running until 2026-10-25 ~15:00Z ------------------------------
+\newcommand{\HNote}{A 7-day run at $k=100$ on the Windows~10-based host (about 700 production-days of queries per connection, though not of provider reloads; see below) is in progress and will replace this section's age bound.}
 \newcommand{\HAgeNote}{; the 7-day run is in progress}
