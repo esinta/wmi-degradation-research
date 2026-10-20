@@ -47,7 +47,13 @@ const (
 	processTraceRealTime    = 0x00000100
 	processTraceEventRecord = 0x10000000
 	levelVerbose            = 5
-	invalidTraceHandle      = ^uint64(0)
+	// keywordTrace selects the provider's Trace channel, which carries event
+	// 11. Enabling all keywords also selects the Debug channel (event 100,
+	// level 0, so the level does not filter it): from Windows 11 26200.9457
+	// at the latest it fires ~170 times per operation and overflows the
+	// real-time buffers, losing every event (battery 3, 2026-10-20).
+	keywordTrace       = 0x8000000000000000
+	invalidTraceHandle = ^uint64(0)
 )
 
 type wnodeHeader struct {
@@ -263,7 +269,7 @@ func (s *Session) Enable(on bool) error {
 	}
 	g := WMIActivity
 	r, _, _ := procEnableTraceEx2.Call(uintptr(s.handle), uintptr(unsafe.Pointer(&g)), code, levelVerbose,
-		^uintptr(0), 0, 0, 0)
+		keywordTrace, 0, 0, 0)
 	if r != 0 {
 		return fmt.Errorf("EnableTraceEx2(%v): %w", on, syscall.Errno(r))
 	}
