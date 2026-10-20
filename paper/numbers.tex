@@ -24,6 +24,12 @@
 \newcommand{\WbRAM}{8\,GB}
 \newcommand{\WaIdle}{3}
 \newcommand{\WbIdle}{15}
+% W11 re-calibration with CPU type host (same CPU model as W10): results/win11-lab/preflight/20261020T052357Z
+% (build 26200.9711). Idle 60 min: 611 foreign ops/h, all but 28 in its first 16 min (post-boot maintenance:
+% CompatTelRunner, DoSvc, ngentask, scheduled tasks); used only for the CPU-cost sentence until the rerun battery lands.
+\newcommand{\WcRamp}{0.6, 3.0, 6.0, 11.6, 29.5 and 58.1\%}
+\newcommand{\WcK}{50}
+
 
 % --- ST-1 -------------------------------------------------------------------------------
 % W10: ST-1/20261017T224858Z, gate.py window 23:18:58-04:48:58Z; host_slopes.py -> host-slopes.csv.
