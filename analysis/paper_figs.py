@@ -2,6 +2,9 @@
 
     .venv/Scripts/python analysis/paper_figs.py st1 <ST-1 run dir> <out.pdf>
     .venv/Scripts/python analysis/paper_figs.py efault <out.pdf> <E0 dir> <E1 dir> <E2 dir> <E3 dir>
+    .venv/Scripts/python analysis/paper_figs.py client <out.pdf> <label>=<ST-1 run dir> [<label>=<ST-1 run dir> ...]
+
+Memory is plotted in MB (10^6 bytes), the paper's unit.
 """
 
 import sys
@@ -16,7 +19,7 @@ from load import event_time, load_run, shutdown_cut
 
 plt.rcParams.update({"font.size": 7, "font.family": "serif", "axes.linewidth": 0.5,
                      "lines.linewidth": 0.8, "legend.frameon": False})
-MB = 1024 * 1024
+MB = 1e6
 KEYS = ["fw_rules", "drv", "svc", "proc_all", "proc_pid", "ns_ctl"]
 LABELS = {"fw_rules": "MSFT_NetFirewallRule", "drv": "Win32_SystemDriver", "svc": "Win32_Service",
           "proc_all": "Win32_Process (all)", "proc_pid": "Win32_Process (by PID)", "ns_ctl": " __NAMESPACE (repository)"}
@@ -40,16 +43,52 @@ def st1(run_dir, out):
     for (pid, ct), g in p[p["role"] == "wmiprvse"].groupby(["pid", "create_time"]):
         if len(g) < 30:
             continue
-        acct = str(g["host_label"].iloc[-1]).split("|")[0].replace("NT AUTHORITY\\", "")
-        a2.plot((g["ts"] - t0).dt.total_seconds() / 3600, g["private_bytes"] / MB, label=f"WmiPrvSE {pid} ({acct})")
+        acct, _, dlls = str(g["host_label"].iloc[-1]).partition("|")
+        acct = {"NETWORK SERVICE": "NetworkService", "LOCAL SERVICE": "LocalService"}.get(acct.replace("NT AUTHORITY\\", ""), acct)
+        n = len([x for x in dlls.split("+") if x])
+        a2.plot((g["ts"] - t0).dt.total_seconds() / 3600, g["private_bytes"] / MB,
+                label=f"WmiPrvSE {acct} ({n} provider{'s' if n != 1 else ''})")
     w = p[p["role"] == "winmgmt_host"]
     a2.plot((w["ts"] - t0).dt.total_seconds() / 3600, w["private_bytes"] / MB, "k--", label="Winmgmt host")
     c = p[p["role"] == "probe"]
     a2.plot((c["ts"] - t0).dt.total_seconds() / 3600, c["private_bytes"] / MB, ":", color="gray", label="probe (client)")
     a2.set_xlabel("time since start (h)")
     a2.set_ylabel("private MB")
-    a2.set_ylim(0, 46)
+    a2.set_ylim(0, 48)
     a2.legend(fontsize=5.5, ncol=2, loc="upper center", handlelength=1.2)
+    fig.tight_layout(pad=0.3)
+    fig.savefig(out)
+    fig.savefig(out.rsplit(".", 1)[0] + ".png", dpi=200)
+
+
+def client(out, specs):
+    """Change in client private bytes and Go heap since the end of warm-up (30 min), against
+    time since arm start, one colour per host; warm-up and release test shaded."""
+    fig, ax = plt.subplots(figsize=(3.4, 1.8))
+    warm = 0.5
+    for spec, color in zip(specs, ["0.6", "k", "tab:blue"]):
+        label, run_dir = spec.split("=", 1)
+        r = load_run(run_dir)
+        start = event_time(r, "arm_start")
+        c = r.procs[r.procs["role"] == "probe"].set_index("ts").sort_index()
+        for col, ls, what in [("private_bytes", "-", "private"), ("go_heap_alloc", ":", "Go heap")]:
+            m = c[col].resample("5min").median() / MB
+            x = (m.index - start).total_seconds() / 3600
+            base = m[(x >= warm) & (x < warm + 0.25)].median()
+            ax.plot(x, m.values - base, color=color, ls=ls, label=f"{label}, {what}")
+        rel = event_time(r, "release_test_start")
+    ax.axhline(0, color="0.8", lw=0.4)
+    ax.axvspan(0, warm, color="0.92", lw=0)
+    ax.text(warm / 2, 2.15, "warm-\nup", fontsize=5.5, ha="center", va="top")
+    if rel is not None:
+        x = (rel - start).total_seconds() / 3600
+        ax.axvspan(x, x + 1, color="0.92", lw=0)
+        ax.text(x + 0.5, 2.15, "connections\nreleased", fontsize=5.5, ha="center", va="top")
+    ax.set_xlabel("time since start (h)")
+    ax.set_ylabel("change since warm-up (MB)")
+    ax.set_ylim(-1.6, 2.3)
+    ax.set_xlim(0, 7)
+    ax.legend(fontsize=5.5, ncol=2, loc="lower left", bbox_to_anchor=(0.1, 0.0), handlelength=1.6)
     fig.tight_layout(pad=0.3)
     fig.savefig(out)
     fig.savefig(out.rsplit(".", 1)[0] + ".png", dpi=200)
@@ -92,5 +131,7 @@ if __name__ == "__main__":
         st1(sys.argv[2], sys.argv[3])
     elif sys.argv[1] == "efault":
         efault(sys.argv[2], sys.argv[3:7])
+    elif sys.argv[1] == "client":
+        client(sys.argv[2], sys.argv[3:])
     else:
         sys.exit(__doc__)

@@ -14,7 +14,7 @@
 
 \title{\Large\bfseries Clients Rot, Connections Don't:\\ Degradation, Silent Failures and Refresh in Long-Lived WMI Connections}
 \author{Author Name\\ \normalsize Affiliation}
-\date{\ifdraft\small Draft v2.1, 2026-10-20. \authornote{Red: author input}\fi}
+\date{\ifdraft\small Draft v3, 2026-10-20. \authornote{Red: author input}\fi}
 
 \raggedbottom
 \begin{document}
@@ -23,10 +23,10 @@
 \begin{abstract}
 Windows management agents commonly recycle their WMI connections every few hours on the belief that long-lived connections degrade.
 We test that belief with a client whose COM usage is verified on every query, which checks results against non-WMI ground truth and attributes resource use to the provider host serving each query.
-On two hosts, one Windows~10-based and one Windows~11-based, one set of connections served \STaQueries{} and \STbQueries{} queries over 6\,h at 100$\times$ and \WbK{}$\times$ a production agent's rate (about 25 and 12 production-days of queries).
-Latency did not change with connection age on either host.
-Client memory did not grow measurably on the first (\STaPrivSlope{}\,MB/h, 95\% CI \STaPrivCI{}); on the second it grew \STbPrivSlope{}\,MB/h \STbPrivCI{}, within our pre-set bound and returned when the connections closed.
-In our measurements the degradation operators observe is client-induced: an unreleased \code{VARIANT} array leaks about \STtwoLeak{}\,B per read, and cross-apartment calls to the scripting objects cost about 3$\times$ the wall-clock time per collection cycle (5--8$\times$ the CPU).
+On two hosts, one Windows~10-based and one Windows~11-based, one set of connections served \STaQueries{} and \STbQueries{} queries over 6\,h at 100$\times$ and \WbK{}$\times$ a production agent's rate (about 25 and 12.5 production-days of queries).
+Latency, median and 99th percentile, did not change with connection age on either host.
+Client memory did not grow measurably on the first (\STaPrivSlope{}\,MB/h, 95\% CI \STaPrivCI{}; an upper bound near 7.5\,MB/year at the production rate); on the second it grew slowly (\STbPrivSlope{}\,MB/h \STbPrivCI{}), well below our pre-set bound (about 40\,MB/year at the production rate) and fully reclaimed when the connections closed, though whether it reaches a plateau is still open.
+The degradation we could reproduce was client-induced: an unreleased \code{VARIANT} array leaks about \STtwoLeak{}\,B per read, and cross-apartment calls to the scripting objects cost about 3$\times$ the wall-clock time per collection cycle (5--8$\times$ the CPU).
 \emph{Silent} failures matter more: a popular Go COM library ends enumeration without reporting the error, three of a production agent's 23 queries fail on every poll on both architectures while logged as successes, and \code{Win32\_SystemDriver} omits a registered driver whose binary is missing, depending on the properties selected.
 Fault injection shows where refresh matters: on both hosts a restart of the WMI service broke every existing connection permanently; reconnecting on the error restored service within seconds, a 1-hour timer after 30\,min, and a replica of the agent's pool not within the hour, because its health check does not recognise the error.
 A crash of a provider host cost at most the call it was serving; the connection survived.
@@ -42,7 +42,7 @@ The production agent we studied (``Agent A''; \authornote{state author/vendor re
 Whether those symptoms come from \emph{connection age} or from the \emph{client} has, to our knowledge, not been measured.
 It is hard to measure: an incorrect client produces exactly these symptoms, the usual metric (memory summed over all \code{WmiPrvSE.exe} processes) mixes every WMI client on the host, and many WMI failures are silent.
 
-We contribute (1)~a method that removes these confounders: a self-tested correct client, per-provider-host attribution, an ETW meter of foreign WMI clients, and non-WMI ground truth (\S\ref{sec:method}); (2)~evidence on Windows~10- and Windows~11-based hosts that a correct client's connections do not degrade at accelerated query counts (\S\ref{sec:correct}); (3)~measurements of two client bugs that produce the folklore symptoms, and a catalogue of silent failures (\S\ref{sec:client}, \S\ref{sec:silent}); and (4)~a fault-injection comparison of refresh strategies with concrete guidance (\S\ref{sec:fault}, \S\ref{sec:discussion}).
+We contribute (1)~a method that removes these confounders: a self-tested correct client, per-provider-host attribution, an ETW meter of foreign WMI clients, and non-WMI ground truth (\S\ref{sec:method}); (2)~evidence on two architectures that a correct client's connections do not degrade in latency, and that client memory stays small and below a pre-set bound, at accelerated query counts (\S\ref{sec:correct}); (3)~measurements of two client bugs that produce the folklore symptoms, and a catalogue of silent failures (\S\ref{sec:client}, \S\ref{sec:silent}); and (4)~a fault-injection comparison of refresh strategies with concrete guidance (\S\ref{sec:fault}, \S\ref{sec:discussion}).
 
 \section{Background}
 A client calls \code{IWbemServices} in the WMI service (\code{Winmgmt}), which dispatches each class to a provider.
@@ -72,7 +72,7 @@ The two hosts' virtual CPU models differ, so absolute latency and CPU are compar
 Every 10\,s the probe samples itself, the \code{Winmgmt} service host (PID from the service control manager) and each \code{WmiPrvSE} by PID and creation time, labelled with its account and the provider DLLs it has loaded; this maps each queried class to the host serving it.
 Nothing here uses WMI.
 The class-to-host map was the same on both hosts: the CIMWin32, event-log, firewall, scheduled-task, Device Guard, TPM and (where present) BitLocker providers share the NetworkService host, and Defender's provider runs in the LocalService host.
-A real-time ETW session on \code{Microsoft-Windows-WMI-Activity}~\cite{ms-tracing} counts operation starts by client PID, so foreign WMI clients are observed rather than assumed absent: in a 60-minute idle baseline it counted \WaIdle{} and \WbIdle{} foreign operations per hour on the two hosts, against a limit of 60.
+A real-time ETW session on \code{Microsoft-Windows-WMI-Activity}~\cite{ms-tracing} counts operation starts by client PID, so foreign WMI clients are observed rather than assumed absent: in a 60-minute idle baseline it counted \WaIdle{} and \WbIdle{} foreign operations per hour on the two hosts, against a ceiling of 60/h fixed in the pre-registered design (one foreign operation per minute on average, under 0.2\% of the probe's own queries at $k_H$; a window above it would have been flagged, and an arm with more than 10\% flagged windows discarded).
 During the self-test and client-bug arms this session ran continuously; during the fault arms it was duty-cycled (\S\ref{sec:discussion}), so foreign activity there is sampled.
 Because service-host grouping differs across editions and memory sizes~\cite{ms-svchost}, we read from the service control manager whether \code{Winmgmt} runs in its own \code{svchost.exe} or shares one: on both hosts it ran alone in its own.
 We found that \code{tasklist.exe}, the CIM cmdlets and PowerShell remoting all issue WMI calls; host inspection during runs was restricted to tools measured at zero WMI operations.
@@ -88,9 +88,9 @@ Growth is the OLS slope of 10\,s samples after a 30-minute warm-up with Newey--W
 Pass criteria were fixed before the runs, in a timestamped commit of the design (\code{7f3cbb9}, 2026-10-16; the analysis implementing them, \code{3cfbca5}, is unchanged since 2026-10-17) \authornote{archive the repository publicly so these timestamps are verifiable}: client private-byte slope $<1$\,MB/h and $<3$\,B per array read (upper 95\% bound), handle range $\le 50$, and $\le 5$\,MB retained after a 1-hour release test.
 Memory figures use MB $=10^6$ bytes throughout.
 
-\section{A correct client does not degrade}\label{sec:correct}
+\section{A correct client's connections do not degrade}\label{sec:correct}
 \begin{table}[t]\centering\footnotesize\setlength{\tabcolsep}{3pt}
-\caption{ST-1: one set of connections, strategy \emph{none}, 6\,h, on each host. CIs are 95\%, HAC. Memory in MB $=10^6$\,B.}\label{tab:st1}
+\caption{ST-1: one set of connections, strategy \emph{none}, 6\,h, on each host. All slopes are over the same 5.5-hour window (after the 30-minute warm-up); CIs are 95\%, HAC. Memory in MB $=10^6$\,B.}\label{tab:st1}
 \begin{tabular}{@{}lrr@{}}\toprule
 & Win~10-based & Win~11-based\\\midrule
 $k$ (production-days of queries) & 100 (25) & \WbK{} (12.5)\\
@@ -105,12 +105,15 @@ Client private bytes (MB/h) & \STaPrivSlope{} & \STbPrivSlope{}\\
 \quad array reads & \STaArrayReads{} & \STbArrayReads{}\\
 Client handles: range & 17 & 9\\
 Retained after 1\,h release (MB) & \STaRelease{} & \STbRelease{}\\
-NetworkService host (MB/h)$^a$ & 0.085 & 0.076\\
-& [0.036, 0.133] & [$-0.017$, 0.170]\\
+NetworkService host (MB/h) & 0.085 & 0.267\\
+& [0.066, 0.103] & [0.142, 0.392]\\
+LocalService host (MB/h) & 0.036 & 0.090\\
+& [0.001, 0.071] & [0.057, 0.122]\\
 Winmgmt host (MB/h) & $-0.020$ & 0.034\\
 & [$-0.043$, 0.003] & [0.016, 0.052]\\
+Latency p99, last vs.\ first hour$^a$ & $-1.1$ to $+0.4$\% & $-2.2$ to $+0.8$\%\\
 Recycles; induced CPU & 0; 30.2\% & 0; 24.8\%\\\bottomrule
-\multicolumn{3}{@{}l}{$^a$ second half of the window}
+\multicolumn{3}{@{}p{0.92\columnwidth}}{$^a$ range over the query keys with median latency above 100\,ms (six and seven keys).}
 \end{tabular}
 \end{table}
 The self-test arm (strategy \emph{none}: one set of connections held open for the whole run, with the probe's per-query COM ledger active) doubles as our longest correct-client run on each host (Table~\ref{tab:st1}).
@@ -121,29 +124,39 @@ All client invariants held on every query on both hosts (correct apartment, no o
 \paragraph{Windows~10-based host.}
 Client memory did not grow measurably.
 If growth tracks queries, we can rule out at the production rate a client-side leak larger than about 0.86\,kB/h (roughly 7.5\,MB/year) at 95\% confidence.
-Median latency per query key stayed flat across connection age, from about 2\,ms (repository classes) to 230\,ms (\code{MSFT\_NetFirewallRule}, 260 rows; first to last hour $-2$\%).
+Median latency per query key stayed flat across connection age, from about 2\,ms (repository classes) to 230\,ms (\code{MSFT\_NetFirewallRule}, 260 rows; first to last hour of the window $-2$\%).
+The tails were as flat: for the six keys with medians above 100\,ms, the 95th and 99th percentiles moved by at most 1.6\% from the first to the last hour, no key's 99th percentile rose by more than 1.9\,ms, and no successful query took longer than 363\,ms against a 30\,s deadline (none was abandoned).
 The \code{Winmgmt} host was flat ($-0.020$\,MB/h [$-0.043$, 0.003]).
-The LocalService provider host rose 0.7\,MB in its first hour and was then flat (second half $-0.017$\,MB/h [$-0.055$, 0.021]).
-The NetworkService host, serving six providers, grew 0.085\,MB/h [0.066, 0.103] over the window, about 0.5\,MB in 5.5\,h, decelerating to 0.016 [$-0.092$, 0.123] in the last third.
+The provider hosts grew mostly early: by thirds of the window, the LocalService host 0.19, 0.01 and $-0.03$\,MB/h, and the NetworkService host, serving six providers, 0.13, 0.07 and 0.02\,MB/h [$-0.09$, 0.13] (0.085\,MB/h [0.066, 0.103] over the window, about 0.5\,MB in 5.5\,h).
 Six hours cannot distinguish a plateau from slow growth there; the 7-day run will.
 The single client handle step (339 to 347) coincides with one additional Go runtime thread and is flat before and after.
 \HNote{}
 
 \paragraph{Windows~11-based host.}
 Latency was again flat with connection age: first-to-last-hour medians moved by less than 1\% for \code{MSFT\_NetFirewallRule} (648\,ms, 492 rows), \code{Win32\_SystemDriver} (272\,ms) and \code{Win32\_Service} (191\,ms), and by 2\% for the full process list (167 to 170\,ms).
-The provider hosts and the \code{Winmgmt} host rose in the first third of the window and were flat thereafter (NetworkService host, now with seven providers, second half 0.076\,MB/h [$-0.017$, 0.170]).
-The client's private bytes, however, grew \STbPrivSlope{}\,MB/h \STbPrivCI{} (\STbPerRead{}\,B per array read), 4.3$\times$ below the pre-set bound but distinguishable from zero, and without slowing over the window (by thirds 0.42, 0.04 and 0.40\,MB/h; 27.5 to 29.0\,MB).
-The Go heap was flat ($-0.010$\,MB/h [$-0.041$, 0.021]), so the growth is in native memory, and it was returned when the connections were released: at the end of the release test the client was 0.90\,MB below its post-warm-up level.
-It is therefore memory held on behalf of open connections, not leaked.
-If it tracks queries it amounts to about 4.6\,kB/h at the production rate (40\,MB/year); one rate cannot tell queries from time, and the 7-day run covers only the Windows~10-based host.
+For the seven keys with medians above 100\,ms the 95th and 99th percentiles moved by at most 2.6\%, no key's 99th percentile rose by more than 3.2\,ms, and no successful query took longer than 940\,ms against a 30\,s deadline (none was abandoned).
+The provider hosts and the \code{Winmgmt} host grew modestly over the window (Table~\ref{tab:st1}), most of the rise in the first third: by thirds, the NetworkService host, now with seven providers, 1.37, $-0.19$ and $-0.06$\,MB/h (30-minute medians 13.1 to 14.7\,MB), the LocalService host 0.27, 0.09 and 0.02, and the \code{Winmgmt} host 0.13, 0.03 and 0.01\,MB/h, the last two thirds' intervals all including zero.
+The client's private bytes, however, grew \STbPrivSlope{}\,MB/h \STbPrivCI{} (\STbPerRead{}\,B per array read): distinguishable from zero, but 4.3$\times$ below our pre-set bound and small in absolute terms (27.5 to 29.0\,MB over the arm, and about 4.6\,kB/h, or 40\,MB/year, at the production rate if it tracks queries).
+The growth was uneven across the window (by thirds 0.42, 0.04 and 0.40\,MB/h), so these 6 hours cannot tell whether it continues linearly or approaches a plateau.
+The Go heap was flat ($-0.010$\,MB/h [$-0.041$, 0.021]), locating the growth in native memory, and it was fully reclaimed when the connections were released: at the end of the release test the client was 0.90\,MB below its post-warm-up level.
+This is consistent with memory held on behalf of open connections rather than an unbounded leak; the two are separable only by whether the growth plateaus, which a longer run on this host will decide (Figure~\ref{fig:client}).
+Because closing a connection reclaims this memory, the result can be read as an argument for periodic reconnection.
+It is a weak one.
+Even if the growth is linear in queries and never levels off, at the production rate it amounts to about 3.3\,MB per month of connection age, so reconnecting monthly would bound it there; Agent A's 6-hour cycle reconnects about 120 times as often, and Section~\ref{sec:fault} shows that a timer recovers from the one fault that does break a connection only when it next fires (30\,min in our runs), against seconds for reconnecting on the error.
+\authornote{plateau run: a Windows~11-based strategy-\emph{none} run of 48--72\,h is proposed after the current battery; until then the paragraph above is the case}
 
 \begin{figure}[t]\centering
 \includegraphics[width=\columnwidth]{fig-st1.pdf}
-\caption{ST-1, Windows~10-based host. Top: median latency per 15-minute window against connection age for six query keys. Bottom: private bytes of the two provider hosts (labelled by account and provider DLLs), the Winmgmt host and the client; connections were released at 6\,h.}\label{fig:st1}
+\caption{ST-1, Windows~10-based host. Top: median latency per 15-minute window against connection age for six query keys. Bottom: private bytes of the two provider hosts (labelled by account and number of providers; the providers are listed in Section~\ref{sec:method}), the Winmgmt host and the client; connections were released at 6\,h. The Windows~11-based client is in Figure~\ref{fig:client}.}\label{fig:st1}
+\end{figure}
+
+\begin{figure}[t]\centering
+\includegraphics[width=\columnwidth]{fig-client.pdf}
+\caption{Client memory in ST-1 on both hosts: change in private bytes (solid) and Go heap (dotted) since the end of warm-up, 5-minute medians. Connections were released at 6\,h.}\label{fig:client}
 \end{figure}
 
 \paragraph{Providers reload anyway.}
-On both hosts \code{ClearAfter} is 30\,s (15\,s for event sinks) and the provider-host quotas are identical (512\,MB per host, 1\,GB for all hosts, 4{,}096 handles, 256 threads, 32 processes): neither is tuned per architecture.
+On both hosts, read from the \code{\_\_CacheControl} and \code{\_\_ProviderHostQuotaConfiguration} instances, \code{ClearAfter} is 30\,s (15\,s for event sinks) and the provider-host quotas are identical (512\,MB per host, 1\,GB for all hosts, 4{,}096 handles, 256 threads, 32 processes): neither is tuned per architecture.
 At the production rate ($k=1$) most classes are queried less often than that, and on the Windows~10-based host the WMI-Activity log showed six providers reloading every 1--2 minutes \emph{inside} one long-lived host PID (event 5857 within 10 minutes); the Defender provider's host itself was replaced, and idle hosts exited 60--65\,s after release (60\,s on the Windows~11-based host).
 A production client thus gets a free refresh of provider state every few minutes; only its connection and the WMI service age.
 
@@ -184,7 +197,7 @@ From the agent's code, the consequences are concrete: firewall rules are shipped
 Each was a plausible-looking query.
 \code{Name} is not a property of the abstract \code{\_\_EventConsumer} base class (which has \code{CreatorSID}, \code{MachineName} and \code{MaximumQueueSize}); it appears only on the five derived consumer classes~\cite{ms-eventconsumer}.
 \code{MSFT\_NetApplicationFilter} exposes \code{AppPath} and \code{Package} but no \code{Program} (class definition read on-host with \code{Get-CimClass}); ``Program'' is the name of the \code{Set-NetFirewallApplicationFilter} cmdlet parameter~\cite{ms-setfwapp}, the likely origin of the mistake.
-\code{MSFT\_ScheduledTaskInfo} is not a WMI class; the per-task run times are exposed through \code{MSFT\_TaskDynamicInfo} (\code{LastRunTime}, \code{NextRunTime}, \code{LastTaskResult}, \code{NumberOfMissedRuns})~\cite{ms-taskinfo}.
+\code{MSFT\_ScheduledTaskInfo} is not a WMI class; the per-task run times are exposed through \code{MSFT\_TaskDynamicInfo} (\code{LastRunTime}, \code{NextRunTime}, \code{LastTaskResult}, \code{NumberOfMissedRuns}; class definition read on-host with \code{Get-CimClass})~\cite{ms-taskinfo}.
 
 \begin{table}[t]\centering\small
 \caption{Silent failures. All return success to a lenient client. Codes are the strict loop's, at \code{Next}, on every call.}\label{tab:silent}
@@ -213,6 +226,7 @@ E3 & Agent A pool & 0 & \EthreeErr{} & \EthreeRec{} & \EbKill{} & \EbThreeErr{} 
 On the Windows~10-based host \code{Win32\_SystemDriver} returned 333 drivers whenever the query selected any configuration property (\code{DisplayName}, \code{PathName}, \code{StartMode}, \code{StartName}, \code{ServiceType}, \code{Description}, or \code{*}), and 334 for \code{SELECT Name} or \code{SELECT Name, State}.
 The missing driver, \code{vwifibus}, is registered with the service control manager but its image path points to a file that does not exist.
 No error is returned at any layer; only the comparison with the service control manager reveals it.
+A provider might reasonably omit a driver whose image cannot be read; what makes this a silent failure is that the row count depends on the projection---present for \code{SELECT Name}, absent once any configuration property is requested---with no error or other signal at any layer.
 On the Windows~11-based host the same driver is registered with its binary present in the driver store, and \code{Win32\_SystemDriver} returned all 384 registered drivers for every selection.
 The omission therefore depends on host state, a registered driver whose binary is missing, which is common after driver removal, rather than on the Windows architecture.
 Because it is deterministic, we treat it as a per-key truth baseline and count S2 only above it.
@@ -261,6 +275,7 @@ A timer adds churn and leaves an outage of up to one interval.
 
 \paragraph{Threats to validity.}
 Two hosts, one per architecture, and one workload; each fault was injected once per strategy and host, so the fault results are existence proofs of a strategy's behaviour, not rates.
+The two hosts also differ in acceleration (the Windows~10-based ran at $k=100$, the Windows~11-based at $k=\WbK{}$, forced by the 40\% CPU budget on its slower virtual CPU model), in RAM and in CPU model, so architecture, rate and hardware move together; the between-host difference in client memory growth cannot be attributed to the operating system alone.
 Accelerating the query rate tests count, not age, and not the provider unload/reload cycle, which at $k_H$ does not occur: our longest correct-client connections are 6\,h old\HAgeNote{} on the Windows~10-based host only.
 On the Windows~11-based host the client's connection-held memory grew throughout the 6\,h arm; whether it levels off is open.
 The ETW meter ran one minute in fifteen during the fault arms, so foreign activity there is sampled (on the Windows~10-based host it saw one burst of 6 operations, most likely the Windows Update service; on the Windows~11-based host 82 operations in two arms from a system service polling network-adapter classes); it ran continuously during the self-test and client-bug arms.
@@ -274,7 +289,7 @@ The newer Management Infrastructure (MI) API~\cite{ms-mi} is the client surface 
 We are not aware of published measurements of WMI connection ageing under a verified-correct client, nor of a catalogue of WMI silent failures; we welcome pointers.
 
 \section{Conclusion}
-Long-lived WMI connections, used correctly, did not degrade in latency on either architecture, and the provider hosts and the WMI service grew by less than 2\,MB in 6\,h, mostly in the first hours; the symptoms attributed to ageing were produced by the client, and the costliest failures were silent.
+Long-lived WMI connections, used correctly, did not degrade in latency, median or tail, on either architecture; the provider hosts and the WMI service grew by less than 2\,MB over the 5.5-hour measurement window, mostly in its first third, and the client by at most 1.5\,MB, all of it returned when the connections closed; the symptoms we could reproduce were produced by the client, and the costliest failures were silent.
 Refresh is a recovery mechanism, best driven by errors.
 The probe, catalogue and analysis code are available from the authors \authornote{replace with a public repository URL and an artifact DOI}.
 
