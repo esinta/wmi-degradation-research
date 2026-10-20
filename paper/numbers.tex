@@ -51,25 +51,37 @@
 % --- ST-2 (buggy client, positive control) ----------------------------------------------
 % W10: buggy-ST-2/20261018T072639Z, gate.py window 07:56:39-08:26:39Z; k=10.
 \newcommand{\STtwoLeak}{140}
-% W11: buggy-ST-2 (k=5) and buggy-ST-2-k10 (k=10), battery2 steps 2-3. PENDING.
-\newcommand{\STtwoWbKfive}{\pend{$\approx$141}}
-\newcommand{\STtwoWbKten}{\pend{$\approx$141}}
+% W11: buggy-ST-2/20261019T190802Z (k=5, window 19:38:02-20:08:02Z) and buggy-ST-2-k10/20261019T201302Z
+% (k=10, window 20:43:03-21:13:03Z); gate.py -> gate-st2.json in each arm dir. Both PASS.
+% k=5: 7.907 MiB/h [7.689, 8.125] = 8.29 MB/h, 139.4 B/read [135.8, 143.0], 29,835 array reads, ledger leaked 390.
+% k=10: 15.51 MiB/h [15.06, 15.96] = 16.26 MB/h, 136.2 B/read [132.2, 140.1], 59,670 array reads, ledger leaked 780.
+\newcommand{\STtwoWbKfive}{139.4}
+\newcommand{\STtwoWbKfiveCI}{[135.8, 143.0]}
+\newcommand{\STtwoWbKten}{136.2}
+\newcommand{\STtwoWbKtenCI}{[132.2, 140.1]}
+\newcommand{\STtwoWbRateFive}{8.29}
+\newcommand{\STtwoWbRateTen}{16.26}
 
 % --- E-fault ----------------------------------------------------------------------------
 % W10: E{0,1,2,3}-fault, analysis/efault.py; results/efault-summary.csv. k=100.
 \newcommand{\EthreeErr}{59{,}995}
 \newcommand{\EthreeRec}{none in 60 min}
-% W11: battery2 steps 4-7, k=50. PENDING. Projections from W10 behaviour at W11's rate:
-% 30,600 non-deterministic queries/h; E1 down 30 min; E2 one failure per connection
-% (10 connections, one on an excluded key); E2 recovery = least-busy namespace interval, 2x W10 at half the rate.
-\newcommand{\EbKill}{\pend{0}}
-\newcommand{\EbZeroErr}{\pend{$\approx$30{,}600}}
-\newcommand{\EbOneErr}{\pend{$\approx$15{,}300}}
-\newcommand{\EbOneRec}{\pend{$\approx$1{,}800\,s}}
-\newcommand{\EbTwoErr}{\pend{9}}
-\newcommand{\EbTwoRec}{\pend{$\approx$12\,s}}
-\newcommand{\EbThreeErr}{\pend{$\approx$30{,}600}}
-\newcommand{\EbThreeRec}{\pend{none in 60 min}}
+% W11: E{0,1,2,3}-fault/2026101{9,9,20,20}T*, analysis/efault.py -> results/win11-lab/efault-summary.csv. k=50.
+% Attribution: efault.py splits windows by call START time. On W11 calls were in flight at both faults
+% (W10: none), so its raw columns misplace them: the one call failed by each host kill started ~32 ms before
+% the kill (counted as pre_fault_errors=1), and the 2-3 calls in flight when the restart began (counted in
+% the kill window: E0 3, E1-E3 2). Values below move each call to the fault that failed it:
+% kill = pre_fault_errors; restart = efault restart errors + efault kill-window errors.
+% Raw efault.py restart errors: E0 30,602; E1 15,309; E2 8; E3 30,600. See docs/runs/win11-log.md.
+\newcommand{\EbKill}{1}
+\newcommand{\EbZeroErr}{30{,}605}
+\newcommand{\EbZeroRec}{none in 60 min}
+\newcommand{\EbOneErr}{15{,}311}
+\newcommand{\EbOneRec}{1{,}811.5\,s}
+\newcommand{\EbTwoErr}{10}
+\newcommand{\EbTwoRec}{11.5\,s}
+\newcommand{\EbThreeErr}{30{,}602}
+\newcommand{\EbThreeRec}{none in 60 min}
 
 % --- H (7 days, k=100, W10): running until 2026-10-25 ~15:00Z ------------------------------
 \newcommand{\HNote}{A 7-day run at $k=100$ on the Windows~10-based host (about 700 production-days of queries per connection, though not of provider reloads; see below) is in progress and will replace this section's age bound.}

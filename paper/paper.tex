@@ -14,7 +14,7 @@
 
 \title{\Large\bfseries Clients Rot, Connections Don't:\\ Degradation, Silent Failures and Refresh in Long-Lived WMI Connections}
 \author{Author Name\\ \normalsize Affiliation}
-\date{\ifdraft\small Draft v2, 2026-10-19. \pend{Orange: Windows~11-based values not yet measured.} \authornote{Red: author input}\fi}
+\date{\ifdraft\small Draft v2.1, 2026-10-20. \authornote{Red: author input}\fi}
 
 \raggedbottom
 \begin{document}
@@ -28,7 +28,8 @@ Latency did not change with connection age on either host.
 Client memory did not grow measurably on the first (\STaPrivSlope{}\,MB/h, 95\% CI \STaPrivCI{}); on the second it grew \STbPrivSlope{}\,MB/h \STbPrivCI{}, within our pre-set bound and returned when the connections closed.
 In our measurements the degradation operators observe is client-induced: an unreleased \code{VARIANT} array leaks about \STtwoLeak{}\,B per read, and cross-apartment calls to the scripting objects cost about 3$\times$ the wall-clock time per collection cycle (5--8$\times$ the CPU).
 \emph{Silent} failures matter more: a popular Go COM library ends enumeration without reporting the error, three of a production agent's 23 queries fail on every poll on both architectures while logged as successes, and \code{Win32\_SystemDriver} omits a registered driver whose binary is missing, depending on the properties selected.
-Fault injection shows where refresh matters: a restart of the WMI service breaks every existing connection permanently; reconnecting on the error restored service within seconds, a 1-hour timer after 30\,min, and a replica of the agent's pool not within the hour, because its health check does not recognise the error\pend{, on both hosts}.
+Fault injection shows where refresh matters: on both hosts a restart of the WMI service broke every existing connection permanently; reconnecting on the error restored service within seconds, a 1-hour timer after 30\,min, and a replica of the agent's pool not within the hour, because its health check does not recognise the error.
+A crash of a provider host cost at most the call it was serving; the connection survived.
 Agents should invest in client correctness and result verification, and reconnect on errors rather than on a clock.
 \end{abstract}
 
@@ -152,8 +153,8 @@ Property values read through \code{Properties\_} that were never passed to \code
 In production this was steady memory growth (+1.45\,MB/h over 13.5\,h on a Windows~10 VM, +2.29\,MB/h over 20\,h on a laptop) that scaled with the firewall collector's frequency (+8.8\,$\pm$\,0.6\,MB/h at 60\,s, +0.44\,$\pm$\,0.52 after the fix) and that \emph{recycling did not cure} (2.5\,MB/h with recycling working): the leak is in the client.
 Our positive control re-enables the bug in the probe.
 On the Windows~10-based host at $k=10$ for 1\,h (3{,}180 queries and 31{,}650 array reads in the 30-minute measurement window) the client's private bytes grew 8.97\,MB/h [8.82, 9.10], i.e.\ 141.5\,B per array read (95\% CI [139.3, 143.6]), against 0.06\,B for the correct client (Table~\ref{tab:st1}); the probe's ledger flagged 780 \code{VARIANT} values acquired and never released in the window (about 5.7\,kB per retained value, consistent with the firewall-rule \code{SAFEARRAY}s).
-On the Windows~11-based host we ran the control at two rates, $k=5$ and $k=10$: per array read the leak was \STtwoWbKfive{} and \STtwoWbKten{}\,B, \pend{the same at both rates while the hourly growth doubled}.
-The leak therefore tracks reads, not connection age, \pend{in our own runs as well as in} Agent A's frequency sweep, and recycling did not release it.
+On the Windows~11-based host we ran the control at two rates, $k=5$ and $k=10$: per array read the leak was \STtwoWbKfive{}\,B \STtwoWbKfiveCI{} and \STtwoWbKten{}\,B \STtwoWbKtenCI{}, the same at both rates and within 4\% of the Windows~10-based value, while the hourly growth doubled (\STtwoWbRateFive{} to \STtwoWbRateTen{}\,MB/h).
+The leak therefore tracks reads, not connection age, in our own runs as well as in Agent A's frequency sweep, and recycling did not release it.
 
 \paragraph{Cross-apartment calls (issue 118).}
 Agent A called the apartment-threaded scripting objects from multi-threaded-apartment goroutines, so COM marshalled every call into a single host STA (confirmed in debugger stacks).
@@ -197,11 +198,11 @@ Query / class & Win~10-based & Win~11-based\\\midrule
 \end{table}
 
 \begin{table*}[t]\centering\small
-\caption{E-fault, 90\,min per arm. Errors in the 15\,min after the host kill and the 60\,min after the Winmgmt restart (60{,}000 and 30{,}600 queries at the two hosts' rates); recovery is the time until every connection that failed has answered again.}\label{tab:efault}
+\caption{E-fault, 90\,min per arm. Errors caused by the host kill and by the Winmgmt restart (the 60\,min after it holds 60{,}000 and 30{,}600 queries at the two hosts' rates); a call in flight when a fault began is counted with that fault (Windows~11-based host only: one call at each kill, two or three at each restart); recovery is the time until every connection that failed has answered again.}\label{tab:efault}
 \begin{tabular}{@{}llrrrrrr@{}}\toprule
 & & \multicolumn{3}{c}{Windows~10-based, $k=100$} & \multicolumn{3}{c}{Windows~11-based, $k=\WbK{}$}\\\cmidrule(lr){3-5}\cmidrule(l){6-8}
 Arm & Strategy & kill errors & restart errors & recovery & kill errors & restart errors & recovery\\\midrule
-E0 & none & 0 & 59{,}995 & none in 60 min & \EbKill{} & \EbZeroErr{} & \pend{none in 60 min}\\
+E0 & none & 0 & 59{,}995 & none in 60 min & \EbKill{} & \EbZeroErr{} & \EbZeroRec{}\\
 E1 & timed (1\,h) & 0 & 30{,}002 & 1{,}804.5\,s & \EbKill{} & \EbOneErr{} & \EbOneRec{}\\
 E2 & adaptive & 0 & 8 & 6.0\,s & \EbKill{} & \EbTwoErr{} & \EbTwoRec{}\\
 E3 & Agent A pool & 0 & \EthreeErr{} & \EthreeRec{} & \EbKill{} & \EbThreeErr{} & \EbThreeRec{}\\\bottomrule
@@ -222,26 +223,30 @@ In 19{,}716 calibration queries the only other flags were three scheduled-task c
 \section{Fault recovery and refresh}\label{sec:fault}
 If connections do not age, refresh is only worth its cost as recovery from faults.
 On each host we ran four 90-minute arms back to back ($k=k_H$, fresh connections each), one per strategy: \emph{none} (E0); \emph{timed}, redial every connection after 1\,h (E1); \emph{adaptive}, retire a connection when a failed call's effective error code is connection-level and redial at its next query (E2); and a replica of Agent A's \emph{pool}, which recycles at 6\,h, 50{,}000 queries or 5\,min idle, or when the outer \code{HRESULT} maps to access denied, transport failure, ``not available'' or COM not initialised (E3; rules copied from the agent's source).
-At 15\,min we killed the \code{WmiPrvSE} host serving \code{Win32\_Process} and its co-hosted providers; at 30\,min we restarted \code{Winmgmt} and its running dependent services through the service control manager (1.9\,s in total on the Windows~10-based host).
+At 15\,min we killed the \code{WmiPrvSE} host serving \code{Win32\_Process} and its co-hosted providers; at 30\,min we restarted \code{Winmgmt} and its running dependent services through the service control manager (1.9\,s in total on the Windows~10-based host, which had two running dependents; 0.2--0.4\,s on the Windows~11-based host, which had none).
 The three deterministically failing keys are excluded.
 
-
-
-\paragraph{A provider-host crash between queries was invisible.}
-In all four arms \pend{on both hosts}, killing the provider host between queries caused no failed query: the connection is to \code{Winmgmt}, which had a replacement host with the same providers running 31\,ms later (E0, Windows~10-based), and the 99th-percentile latency in the following 30\,s was unchanged (225 vs.\ 231\,ms before).
-These were single kills with no query in flight at the instant of the kill; Microsoft's guidance is that when WMI stops a host for a quota violation the query it is serving fails~\cite{ms-quota-guide}.
-\pend{[E-midq, Windows~11-based host: N kills timed to land while a \code{Win32\_Process} query is in flight, and what the in-flight call returned.]}
+\paragraph{A provider-host crash cost at most the call in flight.}
+On the Windows~10-based host each of the four kills landed between queries and no query failed: the connection is to \code{Winmgmt}, which had a replacement host with the same providers running 31\,ms later (E0), and the 99th-percentile latency in the following 30\,s was unchanged (225 vs.\ 231\,ms before).
+On the Windows~11-based host, where queries take longer, each kill landed while two calls served by the killed host were in flight, at the same point of the schedule in all four arms.
+A firewall-address query that had started 31--34\,ms earlier and was still waiting for its first object failed about 10\,ms after the kill, at \code{IEnumWbemClassObject::Next}, with \hr{RPC\_S\_CALL\_FAILED} (0x800706BE); this agrees with Microsoft's guidance that when WMI stops a host for a quota violation the query it is serving fails~\cite{ms-quota-guide}.
+A driver query that started about 245\,ms earlier and was already returning rows completed with all 384 drivers, matching the service control manager.
+In both cases the connection was unaffected: under no refresh, the timer and the pool the next query on it succeeded and no other query failed before the service restart 15\,min later, and the 99th-percentile latency was unchanged (687 vs.\ 692\,ms before, E0).
+The adaptive client treats \hr{RPC\_S\_CALL\_FAILED} as connection-level, so it retired the healthy connection and redialled in 7.8\,ms.
+The failure surfaces at \code{Next}, the call whose result the \code{ForEach} helper of Section~\ref{sec:silent} discards, so a client using it would have recorded an empty result as a success.
+These are four kills at one offset into a call, not a map of every phase of a call.
 \authornote{a kill via a lowered \code{MemoryPerHost} quota was not run; drop or schedule}
 
 \paragraph{A service restart is permanent.}
-After \code{Winmgmt} restarted, every call on every existing connection failed with \hr{RPC\_S\_SERVER\_UNAVAILABLE} (0x800706BA) and none recovered on its own (Windows~10-based E0: 59{,}995 of 60{,}000; the 5 successes were calls issued in the 175\,ms before the service stopped\pend{; the Windows~11-based host behaved the same}).
+After \code{Winmgmt} restarted, every call on every existing connection failed with \hr{RPC\_S\_SERVER\_UNAVAILABLE} (0x800706BA) and none recovered on its own (Windows~10-based E0: 59{,}995 of 60{,}000; the 5 successes were calls issued in the 175\,ms before the service stopped; Windows~11-based E0: all \EbZeroErr{}, including three calls in flight when the restart began, which failed with \hr{RPC\_E\_DISCONNECTED} (0x80010108) or \hr{RPC\_S\_CALL\_FAILED}).
 The timed strategy was down until its timer fired, 30 minutes later; an outage of up to one refresh interval is inherent to it.
 This is not peculiar to Agent A: Microsoft documents that its Configuration Manager client (\code{CcmExec}) is left non-functional after the WMI service is restarted, because WMI cancels outstanding requests and does not re-establish them, and recovers only when a periodic health check restarts the client~\cite{ms-ccmexec}.
-The adaptive client lost exactly one query per connection: each of its 9 connections on the Windows~10-based host failed once, was retired, redialled in 1--6\,ms, and its next scheduled query succeeded; Table~\ref{tab:efault} counts 8 because one of the nine failures fell on an excluded deterministic key (\pend{10 connections and 9 counted errors on the Windows~11-based host}).
-The recovery time is the query interval of the least-busy namespace at $k_H$ and would be one production polling interval at $k=1$.
-Agent A's pool behaved exactly like no refresh (59{,}995 errors, no recycle): \hr{RPC\_S\_SERVER\_UNAVAILABLE} is not an outer code its health check treats as unhealthy, and at arm end its connections were 1.5\,h of 6\,h old with at most 21{,}000 of 50{,}000 queries.
-By its rules the first recycle would come from the query budget at about 214\,min ($k=100$) or the 6\,h age limit (production rate); we did not run that long.
-The refresh mechanism did not fire on the one fault that needed it\pend{, on either host}.
+The adaptive client lost exactly one query per connection: each of its 9 connections on the Windows~10-based host failed once, was retired, redialled in 1--6\,ms, and its next scheduled query succeeded; Table~\ref{tab:efault} counts 8 because one of the nine failures fell on an excluded deterministic key.
+On the Windows~11-based host all 10 connections failed once (two on calls in flight when the restart began) and redialled in 1--36\,ms.
+The recovery time, 6.0 and 11.5\,s, is the query interval of the least-busy namespace at each host's $k_H$ and would be one production polling interval at $k=1$.
+Agent A's pool behaved exactly like no refresh on both hosts (59{,}995 and \EbThreeErr{} errors, no recycle): \hr{RPC\_S\_SERVER\_UNAVAILABLE} is not an outer code its health check treats as unhealthy, and at arm end its connections were 1.5\,h of 6\,h old with at most 21{,}000 (10{,}500 on the Windows~11-based host) of 50{,}000 queries.
+By its rules the first recycle would come from the query budget at about 214\,min at $k=100$, from the 6\,h age limit at $k=50$ and at the production rate; we did not run that long.
+The refresh mechanism did not fire on the one fault that needed it, on either host.
 
 \section{Discussion}\label{sec:discussion}
 \paragraph{Guidance.}
@@ -249,7 +254,8 @@ The refresh mechanism did not fire on the one fault that needed it\pend{, on eit
 (2)~Never let an enumeration end without inspecting the last \code{HRESULT}; audit libraries for this pattern.
 (3)~Validate each query once at start-up and verify results against an independent source where one exists; ``0 rows'' is a claim, not a fact.
 (4)~Reconnect on connection-level errors by inspecting the effective error code, not only the outer \code{HRESULT}; test the health check by restarting \code{Winmgmt}.
-In our fault injection the service restart produced \hr{RPC\_S\_SERVER\_UNAVAILABLE} (observed); a robust health check should additionally treat \hr{WBEM\_E\_TRANSPORT\_FAILURE} and \hr{WBEM\_E\_NOT\_AVAILABLE} as connection-level (documented~\cite{ms-wmierr}, not observed here), and \hr{RPC\_E\_DISCONNECTED} is a further candidate from field reports.
+In our fault injection the service restart produced \hr{RPC\_S\_SERVER\_UNAVAILABLE} (observed); a robust health check should additionally treat \hr{WBEM\_E\_TRANSPORT\_FAILURE} and \hr{WBEM\_E\_NOT\_AVAILABLE} as connection-level (documented~\cite{ms-wmierr}, not observed here), and \hr{RPC\_E\_DISCONNECTED} (observed on calls in flight when the service stopped).
+\hr{RPC\_S\_CALL\_FAILED} from a crashed provider host left the connection usable; retiring on it costs one redial.
 A timer adds churn and leaves an outage of up to one interval.
 (5)~Do not attribute \code{WmiPrvSE} growth to your client without per-host attribution and a foreign-client meter.
 
@@ -257,7 +263,7 @@ A timer adds churn and leaves an outage of up to one interval.
 Two hosts, one per architecture, and one workload; each fault was injected once per strategy and host, so the fault results are existence proofs of a strategy's behaviour, not rates.
 Accelerating the query rate tests count, not age, and not the provider unload/reload cycle, which at $k_H$ does not occur: our longest correct-client connections are 6\,h old\HAgeNote{} on the Windows~10-based host only.
 On the Windows~11-based host the client's connection-held memory grew throughout the 6\,h arm; whether it levels off is open.
-The ETW meter ran one minute in fifteen during the fault arms, so foreign activity there is sampled (on the Windows~10-based host it saw one burst of 6 operations, most likely the Windows Update service); it ran continuously during the self-test and client-bug arms.
+The ETW meter ran one minute in fifteen during the fault arms, so foreign activity there is sampled (on the Windows~10-based host it saw one burst of 6 operations, most likely the Windows Update service; on the Windows~11-based host 82 operations in two arms from a system service polling network-adapter classes); it ran continuously during the self-test and client-bug arms.
 Agent A's production numbers come from before/after comparisons of single changes on a few hosts.
 Our no-degradation result is for a client whose COM usage is correct on this provider set; providers themselves can leak, as in a documented \code{WmiPrvSE} user-profile case~\cite{ms-kb2832248}, which per-host attribution (guidance 5) is designed to separate from client growth.
 Older and server-only architectures, and further client builds, remain future work.
