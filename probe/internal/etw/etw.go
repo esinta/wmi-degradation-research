@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -165,6 +166,8 @@ type Session struct {
 	mu      sync.Mutex
 	onOp    func(rec *eventRecord)
 	done    chan error
+	events  atomic.Uint64 // every record delivered, any provider or ID
+	exited  atomic.Value  // string: when and how ProcessTrace returned
 }
 
 // active maps the callback's UserContext to its session (callbacks are
@@ -180,6 +183,9 @@ func eventCallback(rec *eventRecord) uintptr {
 	activeMu.Lock()
 	s := active[rec.UserContext]
 	activeMu.Unlock()
+	if s != nil {
+		s.events.Add(1)
+	}
 	if s != nil && rec.EventHeader.ProviderID == WMIActivity && rec.EventHeader.EventDescriptor.ID == evOperationStart {
 		s.onOp(rec)
 	}
@@ -247,6 +253,10 @@ func Start(name string, onOp func(rec *eventRecord)) (*Session, error) {
 	go func() {
 		runtime.LockOSThread()
 		r, _, _ := procProcessTrace.Call(uintptr(unsafe.Pointer(&s.trace)), 1, 0, 0)
+		// Record the consumer's end: if it ends before Close, the session
+		// keeps running and every later event is lost without an error.
+		s.exited.Store(fmt.Sprintf("ProcessTrace returned at %s: %v (%d records)",
+			time.Now().UTC().Format(time.RFC3339), syscall.Errno(r), s.events.Load()))
 		if r != 0 && syscall.Errno(r) != windows.ERROR_CANCELLED {
 			s.done <- syscall.Errno(r)
 			return
@@ -284,6 +294,15 @@ func (s *Session) Lost() (events, buffers uint32, err error) {
 		return 0, 0, err
 	}
 	return p.EventsLost, p.RealTimeBuffersLost + p.LogBuffersLost, nil
+}
+
+// Events is the number of records delivered to this session's consumer.
+func (s *Session) Events() uint64 { return s.events.Load() }
+
+// Exited says when and how the consumer ended, or "" while it runs.
+func (s *Session) Exited() string {
+	v, _ := s.exited.Load().(string)
+	return v
 }
 
 func (s *Session) stopSession() {

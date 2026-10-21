@@ -35,6 +35,7 @@ type Drained struct {
 	Internal uint64
 	Foreign  uint64
 	Lost     uint32 // cumulative lost events (session)
+	Records  uint64 // cumulative records delivered to the consumer (session)
 	Enabling string // last enable/disable error, if any
 }
 
@@ -50,6 +51,7 @@ type Meter struct {
 	onSince time.Time
 	onFor   time.Duration
 	enErr   string
+	exitRep bool // consumer end already reported
 }
 
 type key struct {
@@ -182,6 +184,11 @@ func (m *Meter) Drain() Drained {
 	}
 	sort.Slice(d.Counts, func(i, j int) bool { return d.Counts[i].ClientPID < d.Counts[j].ClientPID })
 	d.Lost, _, _ = m.sess.Lost()
+	d.Records = m.sess.Events()
+	if ex := m.sess.Exited(); ex != "" && !m.exitRep {
+		m.exitRep = true
+		d.Enabling = ex
+	}
 	return d
 }
 

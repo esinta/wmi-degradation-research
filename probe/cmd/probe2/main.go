@@ -117,7 +117,7 @@ func cmdWMIWatch(ctx context.Context, args []string) error {
 		case <-time.After(*every):
 		}
 		d := m.Drain()
-		log.Printf("on %.0fs: self %d foreign %d internal %d lost %d %s", d.OnFor.Seconds(), d.Self, d.Foreign, d.Internal, d.Lost, d.Enabling)
+		log.Printf("on %.0fs: self %d foreign %d internal %d lost %d records %d %s", d.OnFor.Seconds(), d.Self, d.Foreign, d.Internal, d.Lost, d.Records, d.Enabling)
 		for _, c := range d.Counts {
 			if !c.Self {
 				log.Printf("  pid %d %s local=%v internal=%v ops %d: %s", c.ClientPID, c.Image, c.Local, c.Internal, c.Ops, c.Sample)
