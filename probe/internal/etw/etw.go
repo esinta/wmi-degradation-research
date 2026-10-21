@@ -50,9 +50,10 @@ const (
 	levelVerbose            = 5
 	// keywordTrace selects the provider's Trace channel, which carries event
 	// 11. Enabling all keywords also selects the Debug channel (event 100,
-	// level 0, so the level does not filter it): from Windows 11 26200.9457
-	// at the latest it fires ~170 times per operation and overflows the
-	// real-time buffers, losing every event (battery 3, 2026-10-20).
+	// level 0, so the level does not filter it), which on Windows 11
+	// 26200.9457+ fires ~170 times per operation. That volume was handled
+	// (pre-flight ramp, k=100, 0 lost); the battery 3 losses came from an
+	// orphaned session (see Start). This only cuts the meter's load.
 	keywordTrace       = 0x8000000000000000
 	invalidTraceHandle = ^uint64(0)
 )
@@ -220,6 +221,12 @@ func control(name string, code uint32) (*eventTraceProperties, error) {
 // Start opens a real-time session named name (a stale session of the same
 // name, from a crashed run, is stopped first) and starts consuming it. The
 // provider is not enabled until Enable.
+//
+// A session outlives its process: killing a probe2 without Close leaves a
+// session with the provider enabled and no consumer. On the Win11 host one
+// such session (2026-10-20) made every later WMI-Activity session lose all
+// its events under load until it was stopped. Before a run, check with
+// `logman query -ets | findstr probe2` and stop any session whose PID is gone.
 func Start(name string, onOp func(rec *eventRecord)) (*Session, error) {
 	s := &Session{name: name, onOp: onOp, done: make(chan error, 1)}
 	buf, p := newProps(name)
