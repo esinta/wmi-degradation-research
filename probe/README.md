@@ -2,7 +2,7 @@
 
 Implements `docs/probe-v2-design.md`. Windows-only Go (`go-ole`, `x/sys/windows`).
 
-**Before any run on a host:** confirm the hostname/IP with the user, that the host is lab-only and idle, and that the user approved the run (CLAUDE.md ground rules). `probe2` itself refuses to run when it sees the Esinta agent or another WMI-heavy agent running.
+**Before any run on a host:** confirm the hostname/IP with the user, that the host is lab-only and idle, and that the user approved the run (lab ground rules). `probe2` itself refuses to run when it sees the Esinta agent or another WMI-heavy agent running.
 
 ## Layout
 
