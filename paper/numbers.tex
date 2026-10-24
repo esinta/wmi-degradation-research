@@ -29,6 +29,10 @@
 % CompatTelRunner, DoSvc, ngentask, scheduled tasks); used only for the CPU-cost sentence until the rerun battery lands.
 \newcommand{\WcRamp}{0.6, 3.0, 6.0, 11.6, 29.5 and 58.1\%}
 \newcommand{\WcK}{50}
+% v4.1: the W11 column now comes from battery 3b (CPU type host, same build c4d1794036e4, PF 20261020T052357Z).
+% Its isolation check: the 60-min idle of that pre-flight failed (611/h, all but 28 ops in its first 16 min,
+% post-boot maintenance); the 30-min passive re-check before battery 3b (2026-10-21 16:58-17:28Z) gave 8 ops = 16/h.
+\newcommand{\WcIdle}{16}
 
 
 % --- ST-1 -------------------------------------------------------------------------------
@@ -42,31 +46,38 @@
 \newcommand{\STaPerReadCI}{[$-0.01$, 0.14]}
 \newcommand{\STaArrayReads}{3.48\,M}
 \newcommand{\STaRelease}{$-0.41$}
-% W11: ST-1/20261019T120300Z, gate.py window 12:33:00-18:03:00Z (gate-st1.json); host-slopes.csv.
-% Queries: 194,400 = 183,598 ok + 10,800 deterministic errors + 2 cut off by the arm's end.
-\newcommand{\STbQueries}{194{,}400}
-\newcommand{\STbOk}{183{,}598}
-\newcommand{\STbDetErr}{10{,}800}
-\newcommand{\STbPrivSlope}{0.230}
-\newcommand{\STbPrivCI}{[0.190, 0.271]}
-\newcommand{\STbPerRead}{0.39}
-\newcommand{\STbPerReadCI}{[0.32, 0.45]}
-\newcommand{\STbArrayReads}{3.28\,M}
-\newcommand{\STbRelease}{$-0.90$}
+% W11 (v4.1, battery 3b): ST-1/20261021T173305Z, gate.py window 18:03:05-23:33:06Z (gate-st1-st2k5.json);
+% gate.py prints MiB: 0.2078 MiB/h [0.1463, 0.2693] = 0.218 MB/h [0.153, 0.282]; release -0.4375 MiB = -0.46 MB.
+% Queries: 194,399 = 183,590 ok + 10,799 deterministic errors + 6 transient (Defender provider, 22:28:34-44Z,
+% during a Defender platform update) + 4 cut off by the arm's end. docs/runs/win11-log.md 2026-10-22/24.
+\newcommand{\STbQueries}{194{,}399}
+\newcommand{\STbOk}{183{,}590}
+\newcommand{\STbDetErr}{10{,}799}
+\newcommand{\STbTransErr}{6}
+\newcommand{\STbPrivSlope}{0.218}
+\newcommand{\STbPrivCI}{[0.153, 0.282]}
+\newcommand{\STbPerRead}{0.37}
+\newcommand{\STbPerReadCI}{[0.26, 0.48]}
+\newcommand{\STbArrayReads}{3.24\,M}
+\newcommand{\STbRelease}{$-0.46$}
+% W11 replicate (battery 2, CPU type kvm64): ST-1/20261019T120300Z, window 12:33:00-18:03:00Z.
+\newcommand{\STrPrivSlope}{0.230}
+\newcommand{\STrPrivCI}{[0.190, 0.271]}
 
 % --- ST-2 (buggy client, positive control) ----------------------------------------------
 % W10: buggy-ST-2/20261018T072639Z, gate.py window 07:56:39-08:26:39Z; k=10.
 \newcommand{\STtwoLeak}{140}
-% W11: buggy-ST-2/20261019T190802Z (k=5, window 19:38:02-20:08:02Z) and buggy-ST-2-k10/20261019T201302Z
-% (k=10, window 20:43:03-21:13:03Z); gate.py -> gate-st2.json in each arm dir. Both PASS.
-% k=5: 7.907 MiB/h [7.689, 8.125] = 8.29 MB/h, 139.4 B/read [135.8, 143.0], 29,835 array reads, ledger leaked 390.
-% k=10: 15.51 MiB/h [15.06, 15.96] = 16.26 MB/h, 136.2 B/read [132.2, 140.1], 59,670 array reads, ledger leaked 780.
-\newcommand{\STtwoWbKfive}{139.4}
-\newcommand{\STtwoWbKfiveCI}{[135.8, 143.0]}
-\newcommand{\STtwoWbKten}{136.2}
-\newcommand{\STtwoWbKtenCI}{[132.2, 140.1]}
-\newcommand{\STtwoWbRateFive}{8.29}
-\newcommand{\STtwoWbRateTen}{16.26}
+% W11 (v4.1, battery 3b): buggy-ST-2/20261022T003807Z (k=5, window 01:08:07-01:38:07Z) and
+% buggy-ST-2-k10/20261022T014307Z (k=10); gate.py against the 3b ST-1. Both PASS.
+% k=5: 7.057 MiB/h [6.698, 7.416] = 7.40 MB/h, 126.5 B/read [120.0, 132.9], 29,415 array reads, ledger leaked 390.
+% k=10: 13.00 MiB/h [12.25, 13.75] = 13.63 MB/h, 115.8 B/read [109.1, 122.6], 58,830 array reads, ledger leaked 780.
+\newcommand{\STtwoWbKfive}{126.5}
+\newcommand{\STtwoWbKfiveCI}{[120.0, 132.9]}
+\newcommand{\STtwoWbKten}{115.8}
+\newcommand{\STtwoWbKtenCI}{[109.1, 122.6]}
+\newcommand{\STtwoWbRateFive}{7.40}
+\newcommand{\STtwoWbRateTen}{13.63}
+% W11 replicate (battery 2): buggy-ST-2/20261019T190802Z k=5 139.4 B [135.8, 143.0]; k=10 136.2 B [132.2, 140.1].
 
 % --- E-fault ----------------------------------------------------------------------------
 % W10: E{0,1,2,3}-fault, analysis/efault.py; results/efault-summary.csv. k=100.
@@ -78,15 +89,18 @@
 % the kill (counted as pre_fault_errors=1), and the 2-3 calls in flight when the restart began (counted in
 % the kill window: E0 3, E1-E3 2). Values below move each call to the fault that failed it:
 % kill = pre_fault_errors; restart = efault restart errors + efault kill-window errors.
-% Raw efault.py restart errors: E0 30,602; E1 15,309; E2 8; E3 30,600. See docs/runs/win11-log.md.
+% v4.1: battery 3b, E{0,1,2,3}-fault/20261022T{024807,042308,055808,073309}Z -> results/win11-lab/efault-summary-b3b.csv.
+% Same attribution. Raw efault.py: kill-window errors 2/2/3/2 (pre_fault_errors 1 each = the kill's call);
+% restart errors E0 30,600; E1 15,310; E2 7; E3 30,601. Attributed restart = raw restart + (kill window - 1).
+% Battery 2 (replicate, CPU type kvm64): kill 1; restart 30,605 / 15,311 (1,811.5 s) / 10 (11.5 s) / 30,602.
 \newcommand{\EbKill}{1}
-\newcommand{\EbZeroErr}{30{,}605}
+\newcommand{\EbZeroErr}{30{,}602}
 \newcommand{\EbZeroRec}{none in 60 min}
-\newcommand{\EbOneErr}{15{,}311}
+\newcommand{\EbOneErr}{15{,}312}
 \newcommand{\EbOneRec}{1{,}811.5\,s}
 \newcommand{\EbTwoErr}{10}
-\newcommand{\EbTwoRec}{11.5\,s}
-\newcommand{\EbThreeErr}{30{,}602}
+\newcommand{\EbTwoRec}{10.0\,s}
+\newcommand{\EbThreeErr}{30{,}603}
 \newcommand{\EbThreeRec}{none in 60 min}
 
 % --- H (7 days, k=100, W10): running until 2026-10-25 ~15:00Z ------------------------------
