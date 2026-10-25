@@ -3,10 +3,13 @@
     .venv/Scripts/python analysis/paper_figs.py st1 <ST-1 run dir> <out.pdf>
     .venv/Scripts/python analysis/paper_figs.py efault <out.pdf> <E0 dir> <E1 dir> <E2 dir> <E3 dir>
     .venv/Scripts/python analysis/paper_figs.py client <out.pdf> <label>=<ST-1 run dir> [<label>=<ST-1 run dir> ...]
+    .venv/Scripts/python analysis/paper_figs.py long <out.pdf> <label>=<long run dir> [<label>=<long run dir>]
 
 Memory is plotted in MB (10^6 bytes), the paper's unit.
 """
 
+import glob
+import os
 import sys
 
 import matplotlib
@@ -15,7 +18,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from load import event_time, load_run, shutdown_cut
+from load import event_time, load_run, read_base, shutdown_cut
 
 plt.rcParams.update({"font.size": 7, "font.family": "serif", "axes.linewidth": 0.5,
                      "lines.linewidth": 0.8, "legend.frameon": False})
@@ -94,6 +97,59 @@ def client(out, specs):
     fig.savefig(out.rsplit(".", 1)[0] + ".png", dpi=200)
 
 
+LONG_KEYS = ["fw_rules", "drv", "svc", "proc_all", "proc_pid"]
+
+
+def long(out, specs):
+    """Long runs (H, H72), one column per run: hourly median latency of the larger keys (top) and
+    hourly median private bytes of the client, the Winmgmt host and each provider-host account
+    (bottom; a replaced host continues its account's line), against connection age. Queries are
+    read file by file with a column subset (H has 10.7 M rows)."""
+    fig, axes = plt.subplots(2, len(specs), figsize=(7.0, 3.0), sharex="col", squeeze=False,
+                             gridspec_kw={"height_ratios": [1.1, 1]})
+    for col, spec in enumerate(specs):
+        label, run_dir = spec.rsplit("=", 1)
+        ev = read_base(run_dir, "events")
+        start = ev.loc[ev["kind"] == "arm_start", "ts"].iloc[0]
+        end = ev.loc[ev["kind"].isin(["release_test_start", "arm_end"]), "ts"].min()
+        hours = []
+        for f in sorted(glob.glob(os.path.join(run_dir, "queries-*.csv.gz"))):
+            q = pd.read_csv(f, usecols=["ts_start", "query_key", "status", "latency_ms"], dtype=str)
+            q = q[(q["status"] == "ok") & q["query_key"].isin(LONG_KEYS)]
+            q["h"] = (pd.to_datetime(q["ts_start"], utc=True, format="ISO8601") - start).dt.total_seconds() // 3600
+            hours.append(q.assign(lat=pd.to_numeric(q["latency_ms"])).groupby(["query_key", "h"])["lat"].median())
+        lat = pd.concat(hours).groupby(level=[0, 1]).median()
+        a1, a2 = axes[0, col], axes[1, col]
+        for key in LONG_KEYS:
+            s = lat.loc[key]
+            s = s[s.index < (end - start).total_seconds() // 3600]
+            a1.plot((s.index + 0.5) / 24, s.values, lw=0.6, label=LABELS[key])
+        a1.set_yscale("log")
+        a1.set_ylim(1, 2000)
+        a1.set_title(label, fontsize=7)
+        p = read_base(run_dir, "procs")
+        p = p[p["ts"] <= end]
+        p["acct"] = p["account"].astype(str).str.replace("NT AUTHORITY\\", "", regex=False)
+        lines = [("probe (client)", p["role"] == "probe", dict(color="gray", ls=":")),
+                 ("Winmgmt host", p["role"] == "winmgmt_host", dict(color="k", ls="--")),
+                 ("WmiPrvSE NetworkService", (p["role"] == "wmiprvse") & (p["acct"] == "NETWORK SERVICE"), dict(color="tab:blue")),
+                 ("WmiPrvSE LocalService", (p["role"] == "wmiprvse") & (p["acct"] == "LOCAL SERVICE"), dict(color="tab:orange"))]
+        for name, sel, kw in lines:
+            m = p[sel].set_index("ts")["private_bytes"].resample("1h").median() / MB
+            a2.plot((m.index - start).total_seconds() / 86400 + 1 / 48, m.values, label=name, **kw)
+        a2.set_ylim(0, 33)
+        a2.set_xlabel("connection age (days)")
+        a2.set_xlim(0, (end - start).total_seconds() / 86400)
+        if col == 0:
+            a1.set_ylabel("median latency (ms)")
+            a2.set_ylabel("private MB")
+    axes[0, 0].legend(fontsize=5.5, ncol=3, loc="lower left", handlelength=1.2)
+    axes[1, 0].legend(fontsize=5.5, ncol=2, loc="lower left", handlelength=1.6)
+    fig.tight_layout(pad=0.3)
+    fig.savefig(out)
+    fig.savefig(out.rsplit(".", 1)[0] + ".png", dpi=200)
+
+
 def availability(run):
     """Share of ok queries per 1-minute bin, minutes from arm start."""
     q = run.queries[~shutdown_cut(run.queries)]
@@ -133,5 +189,7 @@ if __name__ == "__main__":
         efault(sys.argv[2], sys.argv[3:7])
     elif sys.argv[1] == "client":
         client(sys.argv[2], sys.argv[3:])
+    elif sys.argv[1] == "long":
+        long(sys.argv[2], sys.argv[3:])
     else:
         sys.exit(__doc__)

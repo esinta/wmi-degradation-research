@@ -6,7 +6,7 @@
 % replication of the W10 result. Rendered in orange while \drafttrue; with \draftfalse the
 % build stops at the first one left, so a final PDF cannot carry an unfilled placeholder.
 % \authornote{...}: a fact only the authors can supply.
-\newif\ifdraft \drafttrue
+\newif\ifdraft \draftfalse
 \ifdraft
   \newcommand{\pend}[1]{\textcolor{orange!85!black}{#1}}
   \newcommand{\authornote}[1]{\textcolor{red!70!black}{\textbf{[#1]}}}
@@ -103,6 +103,30 @@
 \newcommand{\EbThreeErr}{30{,}603}
 \newcommand{\EbThreeRec}{none in 60 min}
 
-% --- H (7 days, k=100, W10): running until 2026-10-25 ~15:00Z ------------------------------
-\newcommand{\HNote}{A 7-day run at $k=100$ on the Windows~10-based host (about 700 production-days of queries per connection, though not of provider reloads; see below) is in progress and will replace this section's age bound.}
-\newcommand{\HAgeNote}{; the 7-day run is in progress}
+% --- Long runs (strategy none, build c4d1794036e4; ledger and apartment checks on every query) -----
+% H (W10): H/20261018T145841Z, k=100, 168 h, window 15:28:41Z 10-18 to 14:58:45Z 10-25 (167.5 h).
+% H72 (W11): H72/20261022T172542Z, k=50, 72 h + 1 h release test, window 17:55:42Z 10-22 to 17:25:44Z 10-25 (71.5 h).
+% Scratchpad v5/long_run.py and v5/extras.py; docs/runs/win2-log.md and win11-log.md, 2026-10-25 21:06.
+% Production-days of queries: 168 h x 100 / 24 = 700; 72 h x 50 / 24 = 150.
+\newcommand{\HQueries}{10{,}684{,}800}
+\newcommand{\HOk}{10{,}079{,}994}
+\newcommand{\HDetErr}{604{,}800}
+\newcommand{\LQueries}{2{,}332{,}795}
+\newcommand{\LOk}{2{,}203{,}196}
+\newcommand{\LDetErr}{129{,}599}
+% Client private, OLS with HAC over the window and from window start + 36 h (MB/h):
+% H: whole 0.00023 [-0.00016, 0.00063]; from +36 h -0.00003 [-0.00037, 0.00031];
+%    post-warm-up 27.04 MB, 2-h-median peak 28.40 at 11.0 h, last 2 h 28.02.
+% H72: whole 0.01446 [0.01265, 0.01628]; from +36 h -0.00068 [-0.00274, 0.00138];
+%    post-warm-up 27.39, 2-h-median peak 29.32 at 56.6 h, ~29.2 at 36 h, last 2 h 29.07; pre-release 28.99;
+%    release end 28.00 (+0.61 vs post-warm-up; gate limit 5 MB); Go heap_alloc 6.15 -> 6.91 pre-release -> 7.02 release end.
+\newcommand{\HPrivLate}{$-0.0000$}
+\newcommand{\HPrivLateCI}{[$-0.0004$, 0.0003]}
+\newcommand{\LPrivLate}{$-0.0007$}
+\newcommand{\LPrivLateCI}{[$-0.0027$, 0.0014]}
+% NetworkService host (first/last 10 min of window): H 13.2 -> 14.8 MB, from +96 h -0.0002 [-0.0014, 0.0010];
+% H72 14.7 -> 20.6 MB, from +48 h 0.0053 [0.0001, 0.0105]; handles 319 -> 540 by 36 h, then 542-543.
+% Winmgmt: H 16.0 -> 19.6 (12-h medians 19.56 from 4.5 d), H72 14.0 -> 14.7 (6-h medians 13.9-16.0).
+% Latency, ok non-deterministic keys with median > 100 ms: H first vs last day medians +1.0 to +2.5 %
+% (daily-median table, 6 keys), OLS of hourly p99 -0.23 to +0.50 ms/day; max 543 ms.
+% H72 first vs last full 12 h: medians -0.1 to -0.9 %, p99 -0.8 to -4.2 % (7 keys); >1 s 271 of 2,187,897, max 9.7 s.
