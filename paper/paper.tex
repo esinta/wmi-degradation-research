@@ -13,8 +13,8 @@
 \input{numbers.tex}
 
 \title{\Large\bfseries Clients Rot, Connections Don't:\\ Degradation, Silent Failures and Refresh in Long-Lived WMI Connections}
-\author{Author Name\\ \normalsize Affiliation}
-\date{\ifdraft\small Draft v5, 2026-10-25. \authornote{Red: author input}\fi}
+\author{Jonathan Kari\\ \normalsize Esinta}
+\date{\ifdraft\small Draft v5.1, 2026-10-25. \authornote{Red: author input}\fi}
 
 \raggedbottom
 \begin{document}
@@ -24,7 +24,7 @@
 Windows management agents commonly recycle their WMI connections every few hours on the belief that long-lived connections degrade.
 We test that belief with a client whose COM usage is verified on every query, which checks results against non-WMI ground truth and attributes resource use to the provider host serving each query.
 On two hosts, one Windows~10-based and one Windows~11-based, after 6-hour self-test runs, we held one set of connections open for 7 days and for 72 hours at 100$\times$ and \WbK{}$\times$ a production polling rate (\HQueries{} and \LQueries{} queries, about 700 and 150 production-days of queries).
-No query was abandoned, and latency stayed flat with connection age: over the week the medians of the slower queries rose by 1.0--2.5\% and their 99th percentiles by at most 0.5\,ms per day; over the 72 hours both fell slightly.
+No query was abandoned, and latency changed little with connection age: over the week the medians of the slower queries rose by 1.0--2.5\% and their 99th percentiles by at most 0.5\,ms per day; over the 72 hours both fell slightly.
 Client memory rose by about 1.4 and 1.9\,MB in the first 11 and 36\,h and not thereafter (95\% CIs of the later slopes within $\pm$0.003\,MB/h), and at the end of the 72-hour run closing the connections returned all but 0.6\,MB of it.
 The busiest provider host grew 1.6\,MB over the week, none of it in the last 3 days, and 5.9\,MB over the 72 hours, still 0.005\,MB/h in the last day.
 The degradation we could reproduce was client-induced: an unreleased \code{VARIANT} array leaks about \STtwoLeak{}\,B per read, and cross-apartment calls to the scripting objects cost about 3$\times$ the CPU time per collection cycle (5.5--7.5$\times$ the client's average CPU on two hosts).
@@ -39,15 +39,15 @@ Windows Management Instrumentation (WMI) is the standard inventory and telemetry
 A widespread practice is to treat WMI connections as perishable: agents tear down and recreate their \code{IWbemServices} connections on a timer or a query budget.
 The belief is documented in the tooling as well as in operations: a widely used Go WMI package warns of a ``memory bug'' and advises callers to run queries in a dedicated process and exit after a bounded number of queries~\cite{se-wmi}, and reported client leaks have been traced to unreleased COM objects rather than to connection age~\cite{zbx-8506}.
 This belief is where we began.
-While building esinta, our OT endpoint-telemetry agent, we saw its WMI client's memory grow, its latency creep and its calls time out, and took these for connection ageing.
-We built the probe described here to test that hypothesis against our earlier client, the WMI layer of earlier esinta builds, which issues the 23 queries below and recycles every 6\,h or 50{,}000 queries, the standard refresh-on-timer rule.
+While building Esinta, our OT endpoint-telemetry agent, we saw its WMI client's memory grow, its latency creep and its calls time out, and took these for connection ageing.
+We built the probe described here to test that hypothesis against our earlier client, the WMI layer of earlier Esinta builds, which issues the 23 queries below and recycles every 6\,h or 50{,}000 queries, the standard refresh-on-timer rule.
 We expected to confirm that long-lived connections rot; instead the verified client showed the degradation was ours.
-\emph{Disclosure:} the authors develop esinta commercially; the earlier client studied here and the bugs reported in it are our own, found and fixed between September and October 2026.
+\emph{Disclosure:} the author founded Esinta, which develops the agent commercially; the earlier client studied here and the bugs reported in it are our own, found and fixed between September and October 2026.
 
 Whether those symptoms come from \emph{connection age} or from the \emph{client} has, to our knowledge, not been measured.
 It is hard to measure: an incorrect client produces exactly these symptoms, the usual metric (memory summed over all \code{WmiPrvSE.exe} processes) mixes every WMI client on the host, and many WMI failures are silent.
 
-We contribute (1)~a method that removes these confounders: a self-tested correct client, per-provider-host attribution, an ETW meter of foreign WMI clients, and non-WMI ground truth (\S\ref{sec:method}); (2)~evidence on two architectures that a correct client's connections do not degrade in latency over 7 days and 72 hours at accelerated query rates, and that client memory levels off below 2\,MB of growth (\S\ref{sec:correct}); (3)~measurements of two client bugs that produce the folklore symptoms, and a catalogue of silent failures (\S\ref{sec:client}, \S\ref{sec:silent}); and (4)~a fault-injection comparison of refresh strategies with concrete guidance (\S\ref{sec:fault}, \S\ref{sec:discussion}).
+We contribute (1)~a method that removes these confounders: a self-tested correct client, per-provider-host attribution, an ETW meter of foreign WMI clients, and non-WMI ground truth (\S\ref{sec:method}); (2)~evidence on two architectures that a correct client's connections show at most a small latency drift over 7 days and 72 hours at accelerated query rates, and that client memory levels off below 2\,MB of growth (\S\ref{sec:correct}); (3)~measurements of two client bugs that produce the folklore symptoms, and a catalogue of silent failures (\S\ref{sec:client}, \S\ref{sec:silent}); and (4)~a fault-injection comparison of refresh strategies with concrete guidance (\S\ref{sec:fault}, \S\ref{sec:discussion}).
 
 \section{Background}
 A client calls \code{IWbemServices} in the WMI service (\code{Winmgmt}), which dispatches each class to a provider.
@@ -130,7 +130,7 @@ We then ran the same client and strategy for 7 days on the Windows~10-based host
 
 \paragraph{Windows~10-based host.}
 Client memory did not grow measurably in the 6 hours; in the 7-day run it rose by about 1.4\,MB in the first 11\,h, 1.0\,MB of it in one step 5\,h into the run, and not thereafter (Table~\ref{tab:long}).
-Median latency per query key stayed flat across connection age, from about 2\,ms (repository classes) to 230\,ms (\code{MSFT\_NetFirewallRule}, 260 rows; first to last hour of the window $-2$\%).
+In the 6-hour run, median latency per query key stayed flat across connection age, from about 2\,ms (repository classes) to 230\,ms (\code{MSFT\_NetFirewallRule}, 260 rows; first to last hour of the window $-2$\%).
 The tails were as flat: for the six keys with medians above 100\,ms, the 95th and 99th percentiles moved by at most 1.6\% from the first to the last hour, no key's 99th percentile rose by more than 1.9\,ms, and no successful query took longer than 363\,ms against a 30\,s deadline (none was abandoned).
 The \code{Winmgmt} host was flat ($-0.020$\,MB/h [$-0.043$, 0.003]).
 The provider hosts grew mostly early: by thirds of the window, the LocalService host 0.19, 0.01 and $-0.03$\,MB/h, and the NetworkService host, serving six providers, 0.13, 0.07 and 0.02\,MB/h [$-0.09$, 0.13] (0.085\,MB/h [0.066, 0.103] over the window, about 0.5\,MB in 5.5\,h).
@@ -228,7 +228,7 @@ Moving each connection to its own STA cut the CPU time per collection cycle abou
 On that busy 16-CPU laptop the client's average CPU had been 28.0\% of a core over 69\,h, with 1{,}490 calls abandoned at their deadline ($\approx$21/h); in the first 1.75\,h of the fixed build it was 3.5--3.8\%, with none abandoned (about 7.5$\times$ less).
 On a quiet 2-vCPU VM the same bug cost 5.0\% vs 0.9\% (about 5.5$\times$) and caused no abandoned calls: the symptom scales with host load, which makes it look like ageing on busy machines.
 This cost is specific to clients that drive the apartment-threaded scripting objects across apartments; native \code{IWbemServices} clients and clients on the newer Management Infrastructure (MI) API~\cite{ms-mi} do not marshal through a single STA and would not show it.
-Pull requests 93, 115 and 118 are in esinta's private repository; their descriptions and measurement comments are archived verbatim, with redactions listed, in the public repository~\cite{repo}.
+Pull requests 93, 115 and 118 are in Esinta's private repository; their descriptions and measurement comments are archived verbatim, with redactions listed, in the public repository~\cite{repo}.
 
 \section{Silent failures}\label{sec:silent}
 \paragraph{A library that swallows errors.}
@@ -268,7 +268,7 @@ Query / class & Win~10-based & Win~11-based\\\midrule
 \end{table}
 
 \begin{table*}[t]\centering\small
-\caption{E-fault, 90\,min per arm. Errors caused by the host kill and by the Winmgmt restart (the 60\,min after it holds 60{,}000 and 30{,}600 queries at the two hosts' rates); a call in flight when a fault began is counted with that fault (Windows~11-based host only: one call at each kill, two or three at each restart); recovery is the time until every connection that failed has answered again.}\label{tab:efault}
+\caption{E-fault, 90\,min per arm. Errors caused by the host kill and by the Winmgmt restart (the 60\,min after it holds 60{,}000 and 30{,}600 queries at the two hosts' rates); a call in flight when a fault began is counted with that fault (Windows~11-based host only: one call at each kill, two or three at each restart, so counts can exceed the window's query total when in-flight calls are reassigned); recovery is the time until every connection that failed has answered again.}\label{tab:efault}
 \begin{tabular}{@{}llrrrrrr@{}}\toprule
 & & \multicolumn{3}{c}{Windows~10-based, $k=100$} & \multicolumn{3}{c}{Windows~11-based, $k=\WbK{}$}\\\cmidrule(lr){3-5}\cmidrule(l){6-8}
 Arm & Strategy & kill errors & restart errors & recovery & kill errors & restart errors & recovery\\\midrule
@@ -362,7 +362,7 @@ The probe, catalogue, analysis code and run logs are in the public repository~\c
 
 \footnotesize\raggedright
 \begin{thebibliography}{23}\setlength{\itemsep}{0pt}
-\bibitem{repo} esinta. \emph{wmi-degradation-research}: probe, analysis, run logs and paper source. \url{https://github.com/esinta/wmi-degradation-research}
+\bibitem{repo} J.~Kari.\emph{wmi-degradation-research}: probe, analysis, run logs and paper source. \url{https://github.com/esinta/wmi-degradation-research}
 \bibitem{ms-hosting} Microsoft. \emph{Provider Hosting and Security}. \url{https://learn.microsoft.com/en-us/windows/win32/wmisdk/provider-hosting-and-security}
 \bibitem{ms-unload} Microsoft. \emph{Unloading a Provider}. \url{https://learn.microsoft.com/en-us/windows/win32/wmisdk/unloading-a-provider}
 \bibitem{ms-cachecontrol} Microsoft. \emph{\_\_CacheControl class}. \url{https://learn.microsoft.com/en-us/windows/win32/wmisdk/--cachecontrol}
