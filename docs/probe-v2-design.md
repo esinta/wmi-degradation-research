@@ -651,13 +651,15 @@ These are product findings for the user to decide on; the product repo was not t
 - **k_H = 100 is the ramp ceiling, not the CPU limit** (29.9 % induced CPU at k=100 vs the 40 % budget; 0 dropped at every step).
 - **Calls running at arm end** were written as `abandoned` with their real sub-deadline latency (1 of 5,300 at k=50). Analysis excludes them (`shutdown_cut`); builds after 379cdbca207a write them as `status=shutdown`.
 
-**Not yet built (increment 2)**
-- ETW foreign-client meter;
-- event 5857 attribution cross-check;
-- `wevtapi` truth;
-- E-fault;
-- X-raw client;
-- analysis scripts.
+**Increment 2** (listed here as not yet built on 2026-10-17; status updated 2026-10-26)
+- Built and used in the runs:
+  - ETW foreign-client meter (§7; `probe/internal/etw`, `analysis/foreign.py`);
+  - E-fault (`probe/internal/fault`, `analysis/efault.py`);
+  - analysis scripts (`analysis/`).
+- Not built:
+  - event 5857 attribution cross-check in the probe (5857/5858 are harvested after each run by `tools/host_events.py`);
+  - `wevtapi` truth (the event-log keys keep truth kind `none`);
+  - X-raw client (conditional arm, not run).
 
 ## 12. Decisions needed from you
 

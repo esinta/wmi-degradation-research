@@ -23,6 +23,8 @@ Implements `docs/probe-v2-design.md`. Windows-only Go (`go-ole`, `x/sys/windows`
 | `internal/runner` | One arm end to end |
 | `internal/preflight` | Per-host checks and the k ramp (§8) |
 | `internal/isolation` | Refuses hosts running WMI-heavy software |
+| `internal/etw` | Foreign-WMI-client meter: real-time, duty-cycled ETW session on Microsoft-Windows-WMI-Activity, operation starts counted by client process; no WMI (§7) |
+| `internal/fault` | E-fault injection: kill the WmiPrvSE serving a class, restart Winmgmt and its running dependents |
 
 ## Build (fine on the dev laptop)
 
@@ -69,6 +71,7 @@ Each arm is `python tools/probe_task.py <t> <arm> -- <args>`. `PF` below is the 
 | E3 | `run -arm E3 -strategy pool -k KH -duration 72h -preflight PF` |
 | B1 | `run -arm buggy-B1-hi -client-class buggy -bug array-leak -k KH/10 -duration 4h -preflight PF`, then `-arm buggy-B1-lo -k KH/40` |
 | B2 | `run -arm buggy-B2-c1 -client-class buggy -bug cross-apartment -cimv2-conns 1 -k KH -duration 4h -preflight PF`, then `-arm buggy-B2-c5 -cimv2-conns 5` |
+| E-fault | `run -arm E0-fault -strategy none -k KH -duration 90m -fault-kill-host 15m -fault-restart-winmgmt 30m -preflight PF`; E1–E3 the same with `-strategy timed -timed-interval 1h`, `adaptive` and `pool` |
 
 **Inspecting a probe host:** use only non-WMI tools: `sc`, `schtasks`, `reg`, `type`, `wevtutil`, `certutil`, PowerShell `Get-Process`/`Get-Service`/`Get-Content`. These were measured with `probe2 wmiwatch` at 0 WMI operations.
 
@@ -87,7 +90,7 @@ python tools/lab_ssh.py <t> get C:/probe/<arm>-<run_id>.zip results/<host>/<arm>
 
 ## Outputs
 
-`queries`, `connections`, `procs`, `host`, `events` and `truth` CSVs (hourly, gzipped), plus `meta.json`. The columns are in `internal/out/schema.go` (design §6). Durations are milliseconds, from QPC.
+`queries`, `connections`, `procs`, `host`, `events`, `truth` and `wmiops` (ETW meter) CSVs (hourly, gzipped), plus `meta.json`. The columns are in `internal/out/schema.go` (design §6). Durations are milliseconds, from QPC.
 
 `silent_mask` bits:
 
@@ -99,9 +102,14 @@ python tools/lab_ssh.py <t> get C:/probe/<arm>-<run_id>.zip results/<host>/<arm>
 | S4 | 8 | skipped objects/properties |
 | S5 | 16 | phantom or mismatched content |
 
-## Not yet implemented (increment 2)
+## Status
 
-- ETW foreign-WMI-client meter (design §7). Isolation is checked at start only, via the service and process lists.
-- WMI-Activity event 5857 cross-check of provider attribution. Attribution uses loaded provider DLLs only.
-- `wevtapi` ground truth for the two event-log queries (truth kind `none` for now).
-- E-fault injection, the X-raw native `IWbemServices` client, and the analysis scripts.
+Implemented in increment 2:
+- **ETW foreign-WMI-client meter** (design §7, `internal/etw`). It runs, duty-cycled, in every arm and writes `wmiops`; `probe2 wmiwatch` uses it standalone. Isolation is checked at start (service and process lists) and monitored throughout by the meter; `analysis/foreign.py` applies the flagged-window rule.
+- **E-fault injection** (`internal/fault`; flags `-fault-kill-host`, `-fault-class`, `-fault-restart-winmgmt`, `-fault-kill-inflight`, `-fault-kill-repeat`, `-fault-kill-every`).
+- **Analysis scripts** (`analysis/`): `gate.py`, `efault.py`, `foreign.py`, `host_slopes.py`, `figures.py`, `paper_figs.py`.
+
+Not implemented:
+- **Probe-side cross-check of provider attribution against WMI-Activity event 5857.** The probe attributes provider hosts by loaded provider DLLs. `tools/host_events.py` harvests events 5857 and 5858 from the host after each run, so the check can be made offline.
+- **`wevtapi` ground truth for the two event-log queries.** Their truth kind is `none`.
+- **The X-raw native `IWbemServices` client.** It was a conditional arm and was not run.
