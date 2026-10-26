@@ -90,7 +90,7 @@ Five silent classes are counted: S1 impossible-empty, S2 truncated (a key presen
 Two virtual machines with 2 vCPU each, one Windows~10-based (4\,GB) and one Windows~11-based (\WbRAM{}), both with Defender real-time protection on and no other WMI-heavy software.
 Both hosts ran the same probe build and analysis code.
 Growth is the OLS slope of 10\,s samples after a 30-minute warm-up with Newey--West standard errors (15-minute lag window)~\cite{newey-west}.
-Pass criteria were fixed before the runs, in a commit of the design (\code{bfbe450}, dated 2026-10-16; the gate script implementing them, \code{6d452ed}, has not changed since, and its data loader last changed in \code{bb22d67} on 2026-10-17, before any gate result was computed; commit hashes refer to the public repository~\cite{repo}): client private-byte slope $<1$\,MB/h and $<3$\,B per array read (upper 95\% bound), handle range $\le 50$, and $\le 5$\,MB retained after a 1-hour release test.
+Pass criteria were fixed before the runs, in a commit of the design (\code{bfbe450}, dated 2026-10-16; the gate script implementing them, \code{5e1272c}, has not changed since, and its data loader last changed in \code{6d5b9d6} on 2026-10-17, before any gate result was computed; commit hashes refer to the public repository~\cite{repo}): client private-byte slope $<1$\,MB/h and $<3$\,B per array read (upper 95\% bound), handle range $\le 50$, and $\le 5$\,MB retained after a 1-hour release test.
 Memory figures use MB $=10^6$ bytes throughout.
 
 \section{A correct client's connections do not degrade}\label{sec:correct}

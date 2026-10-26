@@ -199,8 +199,8 @@ PF (each host) ──► ST-1 / ST-2 / ST-3 ──► gate report to the user (m
 ### 4.3 Run budget
 
 **Hosts available today: none clean.**
-- `win` (Win10 .155): runs the Esinta agent; busy soaking until 2026-10-19 ~20:00Z.
-- `win2` (Server 2019 OT .126): runs the agent.
+- `win` (Win10): runs the Esinta agent; busy soaking until 2026-10-19 ~20:00Z.
+- `win2` (Server 2019 OT): runs the agent.
 - Server 2016: needs a new target.
 - Probe arms need dedicated **clones with no Esinta agent**. Ideally they come from one prepared snapshot (§8).
 

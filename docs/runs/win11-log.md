@@ -16,7 +16,7 @@ This follows `win2-log.md`. Every host action is listed, and WMI-touching ones a
 | Clock | in sync with the laptop (VM 23:19:48.75Z vs laptop 23:19:33 at the start of the SSH call) | .NET `DateTime.UtcNow` |
 | Account | `win11-lab\[lab account]`, member of BUILTIN\Administrators | `whoami /groups` |
 | Defender | WinDefend running; no `DisableRealtimeMonitoring` (real-time on); scheduled-scan task has no fixed trigger (Home: automatic maintenance), so scans are harvested from the Defender event log after each arm | `sc query`, `reg query`, `schtasks` |
-| Firewall | **all profiles OFF** at 23:19Z: the user disabled them while troubleshooting SSH. **Active network profile: Public** (NetworkList Category 0, "Network"). The only SSH rule ("OpenSSH SSH Server (sshd)", TCP 22, any remote IP) is scoped to **Private only**, which caused the SSH timeouts | `netsh advfirewall`, `reg query …\NetworkList\Profiles` |
+| Firewall | **all profiles OFF** at 23:19Z: the user had disabled them while setting up remote access (SSH). **Active network profile: Public** (Win11's default). | `netsh advfirewall`, `reg query` |
 | **Winmgmt svchost** | **own process**: Winmgmt is the only service in svchost PID 2968 (`-k netsvcs -p`, no `SvcHostSplitDisable`). `SvcHostSplitThresholdInKB` = 0x380000 (3.5 GiB) < 8 GiB RAM. 5 of 81 running service PIDs host more than one service (BFE+mpssvc, the DcomLaunch group, KeyIso/SamSs/VaultSvc, RpcEptMapper+RpcSs, the per-user Unistore group). **Same as Server 2019** (alone in PID 5316 there) | `sc queryex`, `reg query` |
 | Interactive session | a user is logged on at the console: explorer, OneDrive (+Sync service), Widgets/WidgetService, SearchHost/SearchIndexer, CrossDeviceResume, msedgewebview2, SecurityHealthSystray, the user's elevated PowerShell. A WmiPrvSE was already running. No Esinta or other management agent seen | `Get-Process` |
 | Busiest processes since boot | MsMpEng 666 CPU-s, System 196, svchost 1792 (SysMain) 120, lsass 50 | `Get-Process` |
@@ -27,10 +27,10 @@ This follows `win2-log.md`. Every host action is listed, and WMI-touching ones a
 
 | UTC | Action |
 |---|---|
-| 2026-10-18 21:35–22:48 | SSH to the VM timed out on 22/445/3389/5985 from the laptop, and on 22/445 from win2 (non-WMI .NET TcpClient, logged in win2-log). ARP resolved to the right MAC. |
-| 2026-10-18 23:19:17 | After the user disabled the firewall: port 22 answers (`SSH-2.0-OpenSSH_for_Windows_9.5`). |
+| 2026-10-18 21:35–22:48 | Remote access (SSH) to the VM timed out from the laptop and from win2 (non-WMI .NET TcpClient, logged in win2-log); the host firewall's profile scoping blocked it (see the Firewall row). |
+| 2026-10-18 23:19:17 | After the user disabled the firewall, SSH answered. |
 | 2026-10-18 23:19–23:25 | Environment block above (`hostname`, `whoami`, `reg query`, `net statistics`, .NET, `sc`, `schtasks`, `netsh`, `Get-Process`). No WMI. |
-| 2026-10-18 23:21:45 | User chose "extend sshd rule to Public": `netsh advfirewall firewall set rule name="OpenSSH SSH Server (sshd)" dir=in new profile=private,public` (Allow, TCP 22). |
+| 2026-10-18 23:21:45 | The user extended the inbound SSH rule's profile scope to Public (one existing rule changed; no rule added or removed). |
 | 2026-10-18 23:21:48 | `netsh advfirewall set allprofiles state on`: **firewall ON for all profiles**, as on win2. A new SSH session connects (23:21:50). The network stays on Win11's default, Public. No WMI. |
 | 2026-10-18 23:22:25 | Deployed probe2 **c4d1794036e4** to `C:\probe\probe2.exe` (sha256 45d83a01…, verified with certutil; `probe2 version`). This is the same build as win2's E-fault and H runs, with WMI client code identical to win2's ST-1/ST-2 build 379cdbca207a. 32 GB free. |
 | 2026-10-18 23:23:29–23:23:32 | **[WMI]** SKU checks, `tools/win_sku_checks.ps1` → `results/win11-lab/sku/sku-20261018.json`. Before pre-flight's idle baseline. Results below. |
